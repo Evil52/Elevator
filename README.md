@@ -82,7 +82,14 @@ NUCLEO-F429ZI, плата MB1137. Микроконтроллер STM32F429ZIT6: 
 
 Прошивка проходит состояния BOOT, SELF_CHECK, INPUTS_READY и RUNNING, плюс FAULT и RECOVERY. Выходы не включаются, пока не готовы входы. Watchdog сбрасывается по прогрессу обязательных задач, а не по миганию светодиода. После перезагрузки плата сообщает новый bootId и причину сброса.
 
-Документация на плату и микроконтроллер лежит в docs/refs: reference manual RM0090, даташит DS9405, errata ES0206, руководство по ядру PM0214, руководство по плате UM1974 и схема MB1137. Ревизии и контрольные суммы записаны в docs/refs/README.md.
+Документацию на плату и микроконтроллер в репозиторий не кладём, это документы ST. Скачивается она с сайта st.com, локально лежит в docs/refs (каталог в .gitignore):
+
+- reference manual RM0090, Rev 22: https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf
+- даташит DS9405, Rev 14: https://www.st.com/resource/en/datasheet/stm32f427vg.pdf
+- errata ES0206, Rev 24: https://www.st.com/resource/en/errata_sheet/es0206-stm32f427437-and-stm32f429439-device-errata-stmicroelectronics.pdf
+- руководство по ядру PM0214, Rev 10: https://www.st.com/resource/en/programming_manual/pm0214-stm32-cortexm4-mcus-and-mpus-programming-manual-stmicroelectronics.pdf
+- руководство по плате UM1974, Rev 11: https://www.st.com/resource/en/user_manual/um1974-stm32-nucleo144-boards-mb1137-stmicroelectronics.pdf
+- схема MB1137, ревизия B-01: https://www.st.com/resource/en/schematic_pack/nucleo_144pins_sch.zip
 
 ## На чём пишем
 
