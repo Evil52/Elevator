@@ -4,3 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[lints]
+workspace = true
+
+[workspace]
+
+# Clippy: all + pedantic на весь workspace. Любой новый crate подключает их
+# строкой `[lints] workspace = true`. Приоритет -1 у групп позволяет
+# переопределять отдельные lints точечно.
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
