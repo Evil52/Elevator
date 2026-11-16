@@ -2,6 +2,7 @@
 name = "Elevator"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 
 [dependencies]
 
@@ -9,6 +10,9 @@ edition = "2024"
 workspace = true
 
 [workspace]
+
+[workspace.package]
+rust-version = "1.97"
 
 
 [workspace.lints.rust]
