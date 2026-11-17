@@ -10,6 +10,7 @@ rust-version.workspace = true
 workspace = true
 
 [workspace]
+members = ["crates/elevator-wire"]
 
 [workspace.package]
 rust-version = "1.97"
@@ -22,3 +23,5 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+
+
