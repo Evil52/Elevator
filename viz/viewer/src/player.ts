@@ -38,9 +38,8 @@ function sample(m: Motion, t: number) {
 }
 function motionAt(line: Timeline, id: Car, t: number) {
   const m = line.motions.filter((m) => m.car === id && m.t0Ms <= t).at(-1)
-  return m && t < line.durationMs
-    ? sample(m, Math.floor(t))
-    : { positionMm: line.initial[id], speed: 0 }
+  const reset = t >= line.durationMs && line.events.at(-1)?.type === 'RESET'
+  return m && !reset ? sample(m, Math.floor(t)) : { positionMm: line.initial[id], speed: 0 }
 }
 export function positionAt(line: Timeline, id: Car, t: number) {
   return motionAt(line, id, t).positionMm
