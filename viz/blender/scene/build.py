@@ -1,4 +1,3 @@
-"""Собирает разрез и запекает события модели в анимацию Blender и GLB."""
 import argparse
 import json
 import sys
@@ -25,7 +24,6 @@ def key(obj, channel, t):
 def animate(timeline, parts):
     cars, doors, landings, lamps = parts
     scene = bpy.context.scene
-    # Кадр равен миллисекунде. Экспортер переносит шкалу в секунды glTF.
     scene.render.fps = 1000
     scene.frame_start, scene.frame_end = 0, timeline['durationMs']
     for car, obj in cars.items():
@@ -62,7 +60,6 @@ def animate(timeline, parts):
                         initial = cycles[0]['fromPermille'] if cycles[0]['t0Ms'] == 0 else 0
                         obj.location.x = origin + sign * DOOR_TRAVEL * initial / 1000
                         key(obj, 'location', event['tMs'])
-    # Скриптовая вставка ключей использует Bézier независимо от настроек интерфейса Blender.
     for obj in scene.objects:
         data = obj.animation_data
         if data and data.action:
@@ -94,7 +91,6 @@ def studio():
     shader = world.node_tree.nodes.get('Background')
     shader.inputs['Color'].default_value = color('97a8c0')
     shader.inputs['Strength'].default_value = .55
-    # Раздельные лучи дают ровный фон и сохраняют мягкие отражения металла.
     nodes = world.node_tree.nodes
     light_path = nodes.new('ShaderNodeLightPath')
     mix = nodes.new('ShaderNodeMixShader')

@@ -1,4 +1,3 @@
-"""Генератор демонстрационной записи Elevator с примерной кинематикой и ETA."""
 import itertools
 import json
 from math import isqrt
@@ -33,7 +32,6 @@ def travel_phases(distance, start_speed=0):
 
 
 def motion_from_parts(car, start, end, when, parts):
-    # Распределяем миллиметры по интегралу скорости, замыкая конечную точку.
     total_area = sum(dt * (v0 + v1) for dt, v0, v1 in parts)
     area = offset = elapsed = 0
     sign = 1 if end >= start else -1
@@ -73,7 +71,6 @@ def eta(position, speed, floor, direction, wait_ms=0, target_floor=None, locked=
 
 
 def assign(matrix, allowed=None, distances=None, free=None):
-    # Перебор частичных инъективных назначений. Строки по id, столбцы по регистрации.
     n = len(matrix[0])
     if allowed is None:
         allowed = [[int(value is not None) for value in row] for row in matrix]
@@ -175,7 +172,6 @@ def scenario():
     lower, upper = calls
     lower_done = finish_trip(healthy, lower, initial[healthy], 0)
     run = travel(failed, upper["floor"], initial[failed], 0)
-    # B1 приходит при достижении шестого этажа на исходной траектории.
     lo, hi = 0, run["t1Ms"]
     while lo < hi:
         mid = (lo + hi) // 2

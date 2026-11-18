@@ -397,7 +397,6 @@ async function start() {
     const button = (e.target as HTMLElement).closest<HTMLElement>('[data-go],[data-log]')
     if (!button) return
     if (dialog.open) dialog.close()
-    // Переход к главе показывает итог пакета событий с одной меткой времени.
     if (button.dataset.go !== undefined)
       seek(lastEventAt(line, line.events[Number(button.dataset.go)].tMs))
     else seek(Number(button.dataset.log))

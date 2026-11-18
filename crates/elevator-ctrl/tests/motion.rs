@@ -1,9 +1,3 @@
-//! Тесты кинематики кабины (S-кривая).
-//!
-//! Параметры: 1600 мм/с (номинальная скорость из ряда ГОСТ 5746), ускорение 1000 мм/с²,
-//! рывок 1000 мм/с³. Разгон с места до 1600 мм/с: три фазы, 2600 мс и 2080 мм. Время
-//! разгона до скорости `v` при `v >= 1000` это `v / 1000 + 1` с.
-
 use elevator_ctrl::motion::MotionParams;
 
 fn params() -> MotionParams {
@@ -22,11 +16,8 @@ fn zero_speed_acceleration_or_jerk_is_rejected() {
 fn braking_distance_covers_three_phase_and_two_phase_ramps() {
     let p = params();
     assert_eq!(p.braking_distance_mm(0), 0);
-    // 1600 мм/с: три фазы, 2080 мм.
     assert_eq!(p.braking_distance_mm(1600), 2080);
-    // 1000 мм/с: граница между режимами, 1000 мм.
     assert_eq!(p.braking_distance_mm(1000), 1000);
-    // 500 мм/с: две фазы рывка, 500 * sqrt(500 / 1000) = 353,55 мм, вверх 354.
     assert_eq!(p.braking_distance_mm(500), 354);
     assert_eq!(p.braking_distance_mm(1), 1);
 }
@@ -34,20 +25,14 @@ fn braking_distance_covers_three_phase_and_two_phase_ramps() {
 #[test]
 fn stopping_distance_of_an_accelerating_car_includes_the_jerk_down_phase() {
     let p = params();
-    // Без ускорения совпадает с тормозным путём.
     assert_eq!(p.stopping_distance_mm(1000, 0), Some(1000));
-    // 500 мм/с с ускорением 1000 мм/с²: рывок гасит ускорение за 1 с, путь 500 + 333,33 мм,
-    // скорость вырастет до 1000 мм/с, торможение с неё ещё 1000 мм: 1833,33, вверх 1834.
     assert_eq!(p.stopping_distance_mm(500, 1000), Some(1834));
-    // Ускорение выше предела и скорость после гашения выше максимальной невозможны.
     assert_eq!(p.stopping_distance_mm(500, 1001), None);
     assert_eq!(p.stopping_distance_mm(1500, 1000), None);
 }
 
 #[test]
 fn time_for_an_accelerating_car_is_the_settle_time_plus_the_stop() {
-    // 500 мм/с с ускорением 1000 мм/с²: гашение 1 с (833,33 мм), потом скорость 1000 мм/с и
-    // оставшиеся 1000,67 мм: торможение 2000 мс и ещё немного. Итого около 3000 мс.
     let ms = params()
         .time_to_stop_from_ms(1834, 500, 1000)
         .expect("достижимо");
@@ -67,18 +52,13 @@ fn standing_still_at_the_target_takes_no_time() {
 #[test]
 fn from_rest_the_ramps_are_exact_and_the_rest_is_cruise() {
     let p = params();
-    // 4160 мм ровно на разгон и торможение: 2 * 2600 мс, хода нет.
     assert_eq!(p.time_to_stop_ms(4160, 0), Some(5200));
-    // Ещё 1600 мм хода на 1600 мм/с: плюс секунда.
     assert_eq!(p.time_to_stop_ms(5760, 0), Some(6200));
-    // 27 000 мм: ход 22 840 мм за 14,275 с.
     assert_eq!(p.time_to_stop_ms(27_000, 0), Some(19_475));
 }
 
 #[test]
 fn from_rest_over_one_floor_the_peak_speed_is_below_the_maximum() {
-    // Пик vc: vc * (vc + 1000) / 1000 = 3000, vc = 1302,78 мм/с, время 2 * (vc / 1000 + 1) =
-    // 4605,55 мс. Округления вверх добавляют до трёх миллисекунд.
     let ms = params().time_to_stop_ms(3000, 0).expect("достижимо");
     assert!((4606..=4609).contains(&ms), "{ms}");
 }
@@ -90,7 +70,6 @@ fn at_full_speed_exactly_the_braking_distance_takes_the_braking_time() {
 
 #[test]
 fn at_full_speed_with_extra_distance_cruises_first() {
-    // 1600 мм хода за секунду, потом торможение 2600 мс.
     assert_eq!(params().time_to_stop_ms(3680, 1600), Some(3600));
 }
 
@@ -110,7 +89,6 @@ fn speed_above_the_maximum_is_rejected() {
 
 #[test]
 fn huge_distance_does_not_overflow() {
-    // 1 мм/с, 1 мм/с², 1 мм/с³: время огромное, обрезается до u32::MAX, без паники.
     let slow = MotionParams::new(1, 1, 1).expect("не нулевые");
     assert_eq!(slow.time_to_stop_ms(u32::MAX, 0), Some(u32::MAX));
 }
@@ -131,7 +109,6 @@ impl Rng {
     }
 }
 
-// Разгон от v1 до v2 на f64: время в секундах и путь в мм.
 fn ramp(v1: f64, v2: f64, accel: f64, jerk: f64) -> (f64, f64) {
     let delta = v2 - v1;
     let seconds = if delta * jerk >= accel * accel {
@@ -142,8 +119,6 @@ fn ramp(v1: f64, v2: f64, accel: f64, jerk: f64) -> (f64, f64) {
     (seconds, f64::midpoint(v1, v2) * seconds)
 }
 
-// Независимый эталон на f64: идеальное время в миллисекундах без округлений, скорость хода
-// подбирается делением пополам.
 fn ideal_ms(max_speed: u32, accel: u32, jerk: u32, distance: u32, speed: u32) -> f64 {
     ideal_ms_from(
         max_speed,
@@ -154,7 +129,6 @@ fn ideal_ms(max_speed: u32, accel: u32, jerk: u32, distance: u32, speed: u32) ->
     )
 }
 
-// То же для дробных пути и скорости.
 fn ideal_ms_from(max_speed: u32, accel: u32, jerk: u32, distance: f64, speed: f64) -> f64 {
     let (vmax, a, j) = (f64::from(max_speed), f64::from(accel), f64::from(jerk));
     let covered = |vc: f64| ramp(speed, vc, a, j).1 + ramp(0.0, vc, a, j).1;
@@ -233,7 +207,6 @@ fn longer_distance_takes_no_less_time_up_to_one_millisecond() {
     }
 }
 
-// Идеальное время для кабины, которая разгоняется: рывок гасит ускорение, дальше обычный профиль.
 fn ideal_ms_accelerating(
     max_speed: u32,
     accel: u32,

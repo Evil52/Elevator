@@ -1,4 +1,3 @@
-"""Проверяет готовый GLB независимо от Blender, включая экспортированные ключи."""
 import argparse
 import json
 import struct

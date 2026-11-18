@@ -1,12 +1,3 @@
-//! Тесты автомата вызовов этажа.
-//!
-//! Правила из README: состояния QUEUED, ASSIGNED, ARRIVED и SERVED, SERVED наступает, когда
-//! двери полностью открылись, после этого отказ вызов в очередь не возвращает. Повторное
-//! нажатие той же кнопки второй вызов не создаёт. Неправильные вызовы отклоняются с причиной:
-//! вниз с первого этажа, вверх с верхнего, несуществующий этаж. Если назначенная кабина
-//! выбыла, вызов сразу возвращается в очередь с исходным временем регистрации. Режим
-//! «пожарная опасность» (ГОСТ Р 53296-2009) отменяет зарегистрированные вызовы.
-
 use elevator_ctrl::calls::{
     CallRecord, CallState, CallTable, Press, Rejection, Served, TransitionError,
 };
@@ -75,7 +66,6 @@ fn pressing_the_same_button_again_does_not_create_a_second_call() {
     let before = table.get(up(3));
     assert_eq!(table.press(up(3), 5000), Ok(Press::Duplicate(0)));
     assert_eq!(table.get(up(3)), before);
-    // Номер для следующего нового вызова не потрачен.
     assert_eq!(table.press(down(4), 6000), Ok(Press::Created(1)));
 }
 
@@ -104,7 +94,6 @@ fn wrong_calls_are_rejected_with_a_reason_and_leave_no_trace() {
     assert_eq!(table.press(down(1), 1), Err(Rejection::DownFromFirst));
     assert_eq!(table.press(up(FLOORS), 1), Err(Rejection::UpFromTop));
     assert_eq!(queued_calls(&table), Vec::new());
-    // Отклонённые нажатия номеров не расходуют.
     assert_eq!(table.press(up(1), 2), Ok(Press::Created(0)));
 }
 
@@ -143,7 +132,6 @@ fn a_call_goes_through_all_the_states_to_served() {
             registered_ms: 1000,
         })
     );
-    // После SERVED вызова в таблице нет.
     assert_eq!(table.get(up(3)), None);
 }
 
@@ -196,7 +184,6 @@ fn transitions_on_a_call_that_is_not_there_are_unknown() {
     assert_eq!(table.assign(up(3), 0), Err(TransitionError::UnknownCall));
     assert_eq!(table.arrived(up(3)), Err(TransitionError::UnknownCall));
     assert_eq!(table.doors_opened(up(3)), Err(TransitionError::UnknownCall));
-    // Несуществующие этажи тоже просто неизвестные вызовы, без паники.
     assert_eq!(table.assign(up(0), 0), Err(TransitionError::UnknownCall));
     assert_eq!(table.arrived(down(200)), Err(TransitionError::UnknownCall));
     assert_eq!(
@@ -226,7 +213,6 @@ fn a_lost_car_returns_its_calls_to_the_queue_with_the_original_time() {
             car: None,
         })
     );
-    // Вызов другой кабины не тронут.
     assert_eq!(table.get(down(3)), other_car);
 }
 
@@ -270,7 +256,6 @@ fn a_requeued_call_keeps_its_place_by_the_original_time() {
     assert_eq!(queued_calls(&table), vec![down(3)]);
     table.press(up(5), 30).expect("создан");
     assert_eq!(table.car_lost(0), 1);
-    // Вернувшийся вызов с временем 10 снова первый, хотя вернулся позже остальных.
     assert_eq!(queued_calls(&table), vec![up(8), down(3), up(5)]);
 }
 
@@ -324,7 +309,6 @@ fn fire_mode_cancels_every_call_and_numbers_keep_growing() {
     assert_eq!(table.get(up(4)), None);
     assert_eq!(queued_calls(&table), Vec::new());
     assert_eq!(table.cancel_all(), 0);
-    // Номера не переиспользуются.
     assert_eq!(table.press(up(2), 10), Ok(Press::Created(3)));
 }
 
@@ -348,7 +332,6 @@ fn every_sensible_button_fits_in_the_table() {
     assert_eq!(queued_calls(&table).len(), 18);
 }
 
-// Модель-эталон на векторе: те же правила, самый простой код, без массивов по этажам.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ModelEntry {
     call: (u8, bool),
@@ -479,7 +462,6 @@ fn random_operations_agree_with_the_model() {
         let mut now = 0_u64;
         for step in 0..400 {
             now += u64::from(rng.below(4));
-            // Этажи от 0 до 12: часть нажатий заведомо неправильные.
             let target = Call {
                 floor: rng.below(13),
                 direction: if rng.below(2) == 0 { Up } else { Down },

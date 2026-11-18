@@ -1,31 +1,18 @@
 #![cfg_attr(not(test), no_std)]
-//! Frame layer of the MCU <-> gateway link (USART3).
-//!
-//! On the wire: `COBS([seq: u8][payload][crc16: u16 LE]) 0x00`.
-//! CRC is CRC-16/CCITT-FALSE over `seq` and `payload`.
 
-/// Largest payload in one frame, bytes.
 pub const MAX_PAYLOAD: usize = 256;
-/// `seq` (1) + payload + CRC16 (2).
 pub const MAX_RAW: usize = MAX_PAYLOAD + 3;
-/// Worst case COBS output for `MAX_RAW` bytes, without the delimiter.
 pub const MAX_COBS: usize = MAX_RAW + MAX_RAW / 254 + 1;
-/// Largest frame on the wire: COBS output plus the `0x00` delimiter.
 pub const MAX_FRAME: usize = MAX_COBS + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
-    /// CRC does not match.
     BadCrc,
-    /// Input or output does not fit the limit or the buffer.
     TooLong,
-    /// Frame is empty or shorter than `seq` + CRC.
     Truncated,
-    /// Not valid COBS: a zero byte inside, or a block runs past the end.
     BadCobs,
 }
 
-/// CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final xor.
 #[must_use]
 pub fn crc16(data: &[u8]) -> u16 {
     let mut crc: u16 = 0xFFFF;
@@ -42,15 +29,10 @@ pub fn crc16(data: &[u8]) -> u16 {
     crc
 }
 
-/// COBS-encodes `input` into `out`, without the delimiter. Returns the length.
-///
-/// # Errors
-/// `TooLong` if `out` is too small.
 pub fn cobs_encode(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     if out.is_empty() {
         return Err(Error::TooLong);
     }
-    // `code_at` is the slot of the current block's code byte, always in `out`.
     let mut code_at = 0;
     let mut write = 1;
     let mut code: u8 = 1;
@@ -71,7 +53,6 @@ pub fn cobs_encode(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
                 code = 1;
             }
         }
-        // The slot reserved for the next code byte must exist.
         if code_at >= out.len() {
             return Err(Error::TooLong);
         }
@@ -80,11 +61,6 @@ pub fn cobs_encode(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     Ok(write)
 }
 
-/// Decodes COBS `input` (without the delimiter) into `out`. Returns the length.
-///
-/// # Errors
-/// `BadCobs` for a zero byte inside or a block that runs past the end,
-/// `TooLong` if `out` is too small.
 pub fn cobs_decode(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     let mut read = 0;
     let mut write = 0;
@@ -103,7 +79,6 @@ pub fn cobs_decode(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
             .copy_from_slice(block);
         write += block.len();
         read += block.len();
-        // A block shorter than the maximum stands for a zero, except at the end.
         if code != 0xFF && read < input.len() {
             *out.get_mut(write).ok_or(Error::TooLong)? = 0;
             write += 1;
@@ -112,10 +87,6 @@ pub fn cobs_decode(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     Ok(write)
 }
 
-/// Builds a frame with the trailing `0x00` into `out`. Returns the length.
-///
-/// # Errors
-/// `TooLong` if the payload is over `MAX_PAYLOAD` or `out` is too small.
 pub fn encode_frame(seq: u8, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     if payload.len() > MAX_PAYLOAD {
         return Err(Error::TooLong);
@@ -131,12 +102,6 @@ pub fn encode_frame(seq: u8, payload: &[u8], out: &mut [u8]) -> Result<usize, Er
     Ok(encoded + 1)
 }
 
-/// Decodes one frame (without the trailing `0x00`). The payload goes to
-/// `out`; returns `(seq, payload length)`.
-///
-/// # Errors
-/// `Truncated`, `BadCobs`, `BadCrc`, or `TooLong` if the frame decodes to more
-/// than `MAX_RAW` bytes or the payload does not fit `out`.
 pub fn decode_frame(frame: &[u8], out: &mut [u8]) -> Result<(u8, usize), Error> {
     if frame.is_empty() {
         return Err(Error::Truncated);
@@ -157,14 +122,6 @@ pub fn decode_frame(frame: &[u8], out: &mut [u8]) -> Result<(u8, usize), Error> 
     Ok((body[0], payload.len()))
 }
 
-/// Byte-by-byte decoder with resync on the `0x00` delimiter.
-///
-/// - `push` returns `None` until a delimiter arrives.
-/// - Two delimiters in a row (an empty frame) give `None`, not an error.
-/// - A bad frame gives `Some(Err(..))` at its delimiter, and the next frame
-///   decodes normally.
-/// - A frame longer than `MAX_COBS` is dropped, and `Err(TooLong)` is reported
-///   once, at its delimiter.
 pub struct Decoder {
     buf: [u8; MAX_COBS],
     len: usize,
@@ -181,7 +138,6 @@ impl Decoder {
         }
     }
 
-    /// Feeds one byte. The payload of a good frame goes to `out`.
     pub fn push(&mut self, byte: u8, out: &mut [u8]) -> Option<Result<(u8, usize), Error>> {
         if byte != 0 {
             match self.buf.get_mut(self.len) {
@@ -237,13 +193,10 @@ mod tests {
         buf[..n].to_vec()
     }
 
-    /// The frame without its trailing delimiter.
     fn body_of(frame: &[u8]) -> &[u8] {
         assert!(frame.len() > 1, "no frame: {frame:02X?}");
         &frame[..frame.len() - 1]
     }
-
-    // 1. CRC16
 
     #[test]
     fn crc16_matches_known_check_value() {
@@ -254,8 +207,6 @@ mod tests {
     fn crc16_of_empty_input_is_the_init_value() {
         assert_eq!(crc16(&[]), 0xFFFF);
     }
-
-    // 2. COBS
 
     #[test]
     fn cobs_encodes_known_vectors() {
@@ -332,8 +283,6 @@ mod tests {
         );
     }
 
-    // 3. Frame round trip
-
     fn assert_round_trip(seq: u8, payload: &[u8]) {
         let frame = frame_of(seq, payload);
         assert_eq!(frame.last(), Some(&0), "frame must end with the delimiter");
@@ -368,8 +317,6 @@ mod tests {
         assert_ne!(frame_of(1, &[9, 9]), frame_of(2, &[9, 9]));
     }
 
-    // 4. Corruption
-
     #[test]
     fn any_single_flipped_bit_is_rejected() {
         let frame = frame_of(5, &[0x10, 0x00, 0x20, 0x30, 0x00, 0x40]);
@@ -394,13 +341,11 @@ mod tests {
         let mut raw = cobs_dec(body_of(&frame)).unwrap();
         assert_eq!(raw.len(), 1 + 4 + 2, "seq + payload + crc");
         let last = raw.len() - 1;
-        raw[last] ^= 0xFF; // last CRC byte
+        raw[last] ^= 0xFF;
         let body = cobs_enc(&raw);
         let mut out = [0u8; MAX_PAYLOAD];
         assert_eq!(decode_frame(&body, &mut out), Err(Error::BadCrc));
     }
-
-    // 5. Truncation
 
     #[test]
     fn an_empty_frame_is_truncated() {
@@ -428,8 +373,6 @@ mod tests {
             );
         }
     }
-
-    // 6. Size limits
 
     #[test]
     fn the_largest_payload_fits_the_largest_frame() {
@@ -470,8 +413,6 @@ mod tests {
         let mut out = [0u8; 2];
         assert_eq!(decode_frame(body_of(&frame), &mut out), Err(Error::TooLong));
     }
-
-    // 7. Streaming decoder and resync
 
     type Item = Result<(u8, Vec<u8>), Error>;
 
