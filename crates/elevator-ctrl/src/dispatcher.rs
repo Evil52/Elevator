@@ -1,108 +1,223 @@
-//! Диспетчер группы: связывает таблицу вызовов, состояние кабин, матрицу ETA и назначение.
-//!
-//! Это склейка готовых частей: [`CallTable`] хранит вызовы, [`build_matrix`] оценивает пары
-//! «кабина и вызов», [`assign`](crate::assign) выбирает пары. Собственных правил у диспетчера
-//! почти нет, он только решает, в каком порядке и по каким наблюдениям двигать вызовы по
-//! состояниям. Время передаётся аргументом, ни кучи, ни паник.
-//!
-//! Вызывающий каждый шаг передаёт наблюдения за кабинами и получает события через
-//! замыкание: так события не нужно складывать в буфер, а их порядок остаётся фиксированным.
+use crate::assign;
+use crate::calls::{CallId, CallRecord, CallState, CallTable, CarId, Press, Rejection, Served};
+use crate::eta::{Call, CarMode, CarState, Direction, EtaParams, QueuedCall, build_matrix};
 
-// Заглушка: тела методов пустые, поэтому часть полей и `self` пока не используется.
-// Атрибут уходит вместе с заглушками.
-#![allow(clippy::unused_self, dead_code)]
-
-use crate::calls::{CallId, CallTable, CarId, Press, Rejection, Served};
-use crate::eta::{Call, CarState, EtaParams};
-
-/// Что диспетчер знает о кабине на этом шаге.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CarInput {
-    /// Состояние для ETA. Поля `up_calls` и `down_calls` диспетчер игнорирует: он заполняет
-    /// их сам из таблицы (вызовы в ASSIGNED, назначенные этой кабине). Поле `car_calls`
-    /// (этажи, нажатые пассажирами внутри) берётся как есть.
     pub state: CarState,
-    /// Этаж, на котором кабина стоит в зоне дверей и двери открываются или уже открыты.
     pub stopped_at: Option<u8>,
-    /// Двери полностью открыты. Учитывается только вместе с `stopped_at`.
     pub doors_open: bool,
 }
 
-/// Событие шага. Поле `call` это вызов этажа, `id` его номер, `car` номер кабины.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// QUEUED стал ASSIGNED.
     Assigned { call: Call, id: CallId, car: CarId },
-    /// ASSIGNED стал ARRIVED.
     Arrived { call: Call, id: CallId, car: CarId },
-    /// ARRIVED стал SERVED, вызов ушёл из таблицы.
     Served { call: Call, served: Served },
-    /// Кабина вышла из обычного режима, вызов вернулся в QUEUED. `car` это выбывшая кабина.
     Requeued { call: Call, id: CallId, car: CarId },
-    /// Вызов отменён режимом «пожарная опасность».
     Cancelled { call: Call, id: CallId },
 }
 
-/// Диспетчер здания на `FLOORS` этажей и `CARS` кабин. За один проход назначения
-/// рассматриваются не больше `CALLS` самых давних вызовов в QUEUED: остальные ждут
-/// следующего шага.
 #[derive(Clone, Debug)]
 pub struct Dispatcher<const FLOORS: usize, const CARS: usize, const CALLS: usize> {
     table: CallTable<FLOORS>,
     params: EtaParams,
 }
 
+const PADDING: Call = Call {
+    floor: 0,
+    direction: Direction::Up,
+};
+
+fn car_id(index: usize) -> CarId {
+    CarId::try_from(index).unwrap_or(CarId::MAX)
+}
+
 impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOORS, CARS, CALLS> {
-    /// Пустой диспетчер. `None`, если число этажей в `params.building` не равно `FLOORS`
-    /// или кабин больше 256 (номер кабины это `u8`).
     #[must_use]
     pub fn new(params: EtaParams) -> Option<Self> {
-        Some(Self {
+        let fits =
+            usize::from(params.building.floors()) == FLOORS && CARS <= usize::from(CarId::MAX) + 1;
+        fits.then(|| Self {
             table: CallTable::new(),
             params,
         })
     }
 
-    /// Нажатие кнопки этажа в момент `now_ms`: то же, что [`CallTable::press`].
-    ///
-    /// # Errors
-    /// Этаж вне здания, вызов вниз с первого этажа или вверх с верхнего.
     pub fn press(&mut self, call: Call, now_ms: u64) -> Result<Press, Rejection> {
         self.table.press(call, now_ms)
     }
 
-    /// Таблица вызовов, только для чтения.
     #[must_use]
     pub const fn calls(&self) -> &CallTable<FLOORS> {
         &self.table
     }
 
-    /// Один шаг диспетчера в момент `now_ms` по наблюдениям `cars` (кабины по id).
-    ///
-    /// Фазы идут строго в таком порядке, события выдаются по ходу фаз:
-    ///
-    /// 1. Пожар. Если хотя бы одна кабина в `CarMode::FireRecall`, отменяются все вызовы в
-    ///    любом состоянии (по `Cancelled` на вызов, по возрастанию номера), и шаг на этом
-    ///    заканчивается: ничего не назначается. Вызовы, нажатые во время режима, отменяются
-    ///    на ближайшем шаге.
-    /// 2. Выбывшие кабины. Для каждой кабины (по id), которая не принимает назначений,
-    ///    все её вызовы в ASSIGNED и ARRIVED возвращаются в QUEUED (`Requeued`), номер и
-    ///    время регистрации прежние.
-    /// 3. Прибытие и двери. Для каждой кабины (по id) с `stopped_at = Some(этаж)` её вызовы
-    ///    на этом этаже, сначала «вверх», потом «вниз»: ASSIGNED становится ARRIVED
-    ///    (`Arrived`), и если `doors_open`, сразу ARRIVED становится SERVED (`Served`).
-    ///    Вызов, уже стоящий в ARRIVED, при открытых дверях становится SERVED.
-    ///    Вызовы других кабин и других этажей не трогаются.
-    /// 4. Назначение. Берутся до `CALLS` вызовов в QUEUED в порядке `(время регистрации,
-    ///    номер)`, строится матрица ETA ([`build_matrix`](crate::eta::build_matrix)) и
-    ///    решается [`assign`](crate::assign). Ожидание вызова `now_ms - registered_ms`
-    ///    (не меньше нуля, не больше `u32::MAX`). Каждая выбранная пара: `Assigned`, по
-    ///    возрастанию id кабины. Кабина получает не больше одного нового вызова за шаг.
-    ///    Недостающие до `CALLS` столбцы матрицы запрещены.
-    ///
-    /// Вызов, назначенный в фазе 4, в фазе 3 обрабатывается только на следующем шаге.
-    /// Обслуженный вызов (SERVED) в очередь уже не возвращается.
-    pub fn step(&mut self, now_ms: u64, cars: &[CarInput; CARS], on_event: impl FnMut(Event)) {
-        let _ = (now_ms, cars, on_event, &self.params);
+    pub fn step(&mut self, now_ms: u64, cars: &[CarInput; CARS], mut on_event: impl FnMut(Event)) {
+        if cars.iter().any(|car| car.state.mode == CarMode::FireRecall) {
+            self.cancel_everything(&mut on_event);
+            return;
+        }
+        self.requeue_lost_cars(cars, &mut on_event);
+        self.register_stops(cars, &mut on_event);
+        self.assign_queued(now_ms, cars, &mut on_event);
+    }
+
+    fn all_calls() -> impl Iterator<Item = Call> {
+        (1..=u8::MAX).take(FLOORS).flat_map(|floor| {
+            [Direction::Up, Direction::Down]
+                .into_iter()
+                .map(move |direction| Call { floor, direction })
+        })
+    }
+
+    fn first_after(
+        &self,
+        after: Option<CallId>,
+        pick: impl Fn(&CallRecord) -> bool,
+    ) -> Option<(Call, CallRecord)> {
+        Self::all_calls()
+            .filter_map(|call| self.table.get(call).map(|record| (call, record)))
+            .filter(|(_, record)| after.is_none_or(|last| record.id > last) && pick(record))
+            .min_by_key(|(_, record)| record.id)
+    }
+
+    fn for_each_by_id(
+        &self,
+        pick: impl Fn(&CallRecord) -> bool,
+        mut visit: impl FnMut(Call, CallRecord),
+    ) {
+        let mut last = None;
+        while let Some((call, record)) = self.first_after(last, &pick) {
+            visit(call, record);
+            last = Some(record.id);
+        }
+    }
+
+    fn cancel_everything(&mut self, on_event: &mut impl FnMut(Event)) {
+        self.for_each_by_id(
+            |_| true,
+            |call, record| {
+                on_event(Event::Cancelled {
+                    call,
+                    id: record.id,
+                });
+            },
+        );
+        self.table.cancel_all();
+    }
+
+    fn requeue_lost_cars(&mut self, cars: &[CarInput; CARS], on_event: &mut impl FnMut(Event)) {
+        for (index, car) in cars.iter().enumerate() {
+            if car.state.mode.accepts_assignments() {
+                continue;
+            }
+            let lost = car_id(index);
+            self.for_each_by_id(
+                |record| record.car == Some(lost),
+                |call, record| {
+                    on_event(Event::Requeued {
+                        call,
+                        id: record.id,
+                        car: lost,
+                    });
+                },
+            );
+            self.table.car_lost(lost);
+        }
+    }
+
+    fn register_stops(&mut self, cars: &[CarInput; CARS], on_event: &mut impl FnMut(Event)) {
+        for (index, car) in cars.iter().enumerate() {
+            let Some(floor) = car.stopped_at else {
+                continue;
+            };
+            let id = car_id(index);
+            for direction in [Direction::Up, Direction::Down] {
+                let call = Call { floor, direction };
+                let Some(record) = self.table.get(call).filter(|record| record.car == Some(id))
+                else {
+                    continue;
+                };
+                if record.state == CallState::Assigned && self.table.arrived(call).is_ok() {
+                    on_event(Event::Arrived {
+                        call,
+                        id: record.id,
+                        car: id,
+                    });
+                }
+                if car.doors_open
+                    && let Ok(served) = self.table.doors_opened(call)
+                {
+                    on_event(Event::Served { call, served });
+                }
+            }
+        }
+    }
+
+    fn assigned_masks(&self, car: CarId) -> (u32, u32) {
+        Self::all_calls().fold((0, 0), |(up, down), call| match self.table.get(call) {
+            Some(record) if record.state == CallState::Assigned && record.car == Some(car) => {
+                let bit = 1_u32
+                    .checked_shl(u32::from(call.floor) - 1)
+                    .unwrap_or_default();
+                match call.direction {
+                    Direction::Up => (up | bit, down),
+                    Direction::Down => (up, down | bit),
+                }
+            }
+            _ => (up, down),
+        })
+    }
+
+    fn assign_queued(
+        &mut self,
+        now_ms: u64,
+        cars: &[CarInput; CARS],
+        on_event: &mut impl FnMut(Event),
+    ) {
+        let mut queued = [PADDING; CALLS];
+        let count = self.table.queued(&mut queued);
+        if count == 0 {
+            return;
+        }
+        let window: [QueuedCall; CALLS] =
+            core::array::from_fn(|index| match queued.get(index).filter(|_| index < count) {
+                Some(&call) => QueuedCall {
+                    call,
+                    waited_ms: self.table.get(call).map_or(0, |record| {
+                        u32::try_from(now_ms.saturating_sub(record.registered_ms))
+                            .unwrap_or(u32::MAX)
+                    }),
+                },
+                None => QueuedCall {
+                    call: PADDING,
+                    waited_ms: 0,
+                },
+            });
+        let states: [CarState; CARS] = core::array::from_fn(|index| {
+            let (up_calls, down_calls) = self.assigned_masks(car_id(index));
+            CarState {
+                up_calls,
+                down_calls,
+                ..cars[index].state
+            }
+        });
+        let picks = assign(&build_matrix(&self.params, &states, &window));
+        for (index, pick) in picks.iter().enumerate() {
+            let Some(&call) = pick.and_then(|column| queued.get(column)) else {
+                continue;
+            };
+            let car = car_id(index);
+            if self.table.assign(call, car).is_ok()
+                && let Some(record) = self.table.get(call)
+            {
+                on_event(Event::Assigned {
+                    call,
+                    id: record.id,
+                    car,
+                });
+            }
+        }
     }
 }

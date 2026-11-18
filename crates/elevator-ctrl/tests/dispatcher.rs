@@ -1,12 +1,3 @@
-//! Тесты группового диспетчера.
-//!
-//! Диспетчер склеивает готовые части, поэтому главный оракул это сами части: ожидаемое
-//! назначение считается через `eta_ms`, `build_matrix` и `assign` напрямую. Отдельно
-//! проверены порядок фаз шага, правила README (отказ возвращает вызов в очередь сразу,
-//! обслуженный вызов не возвращается, пожар отменяет вызовы) и детерминизм.
-//!
-//! Здание: 10 этажей по 3000 мм, три кабины, окно назначения задаётся в каждом тесте.
-
 use elevator_ctrl::assign;
 use elevator_ctrl::calls::{CallRecord, CallState, Press, Served};
 use elevator_ctrl::dispatcher::{CarInput, Dispatcher, Event};
@@ -49,7 +40,6 @@ const fn pos(floor: u8) -> u32 {
     (floor as u32 - 1) * HEIGHT
 }
 
-// Стоящая кабина на этаже: двери закрыты, назначений нет, в зоне дверей не отмечена.
 fn idle(floor: u8) -> CarInput {
     CarInput {
         state: CarState {
@@ -68,7 +58,6 @@ fn idle(floor: u8) -> CarInput {
     }
 }
 
-// Кабина стоит в зоне дверей на этаже: двери открываются или уже открыты.
 fn stopped(floor: u8, doors_open: bool) -> CarInput {
     CarInput {
         stopped_at: Some(floor),
@@ -108,7 +97,6 @@ fn record<const C: usize, const K: usize>(
     group.calls().get(call)
 }
 
-// Номер кабины из единственного события назначения в `events`.
 fn assigned_car(events: &[Event]) -> usize {
     let cars: Vec<usize> = events
         .iter()
@@ -180,7 +168,6 @@ fn a_single_call_goes_to_the_car_with_the_smallest_eta() {
     }
 }
 
-// Окно назначения в случайных тестах меньше возможного числа вызовов в очереди.
 const WINDOW: usize = 4;
 
 struct Rng(u64);
@@ -211,8 +198,6 @@ fn random_call(rng: &mut Rng) -> Call {
     call(rng.floor(), direction)
 }
 
-// Кабина в произвольном состоянии. В `up_calls` и `down_calls` лежит мусор: диспетчер
-// обязан его игнорировать.
 fn random_car(rng: &mut Rng, mode: CarMode) -> CarInput {
     let base = idle(rng.floor());
     CarInput {
@@ -233,6 +218,38 @@ fn random_car(rng: &mut Rng, mode: CarMode) -> CarInput {
     }
 }
 
+fn assert_table(
+    group: &Dispatcher<10, 3, WINDOW>,
+    queued: &[(Call, u64, u32)],
+    owned: &[(Call, u64, u32, u8)],
+    context: &str,
+) {
+    for &(target, registered_ms, id) in queued {
+        assert_eq!(
+            record(group, target),
+            Some(CallRecord {
+                id,
+                state: CallState::Queued,
+                registered_ms,
+                car: None,
+            }),
+            "{context}"
+        );
+    }
+    for &(target, registered_ms, id, car) in owned {
+        assert_eq!(
+            record(group, target),
+            Some(CallRecord {
+                id,
+                state: CallState::Assigned,
+                registered_ms,
+                car: Some(car),
+            }),
+            "{context}"
+        );
+    }
+}
+
 #[test]
 fn the_group_decision_equals_assign_over_build_matrix() {
     for seed in 1..=300_u64 {
@@ -249,69 +266,80 @@ fn the_group_decision_equals_assign_over_build_matrix() {
             random_car(&mut rng, mode)
         });
 
-        // Нажатия идут с неубывающим временем, поэтому очередь вызовов это порядок нажатий.
         let mut now = 0_u64;
-        let mut queued = Vec::new();
-        for _ in 0..rng.below(8) {
-            now += u64::from(rng.below(5000));
-            let target = random_call(&mut rng);
-            if let Ok(Press::Created(id)) = group.press(target, now) {
-                queued.push((target, now, id));
+        let mut queued: Vec<(Call, u64, u32)> = Vec::new();
+        let mut owned: Vec<(Call, u64, u32, u8)> = Vec::new();
+        for round in 0..3 {
+            for _ in 0..rng.below(8) {
+                now += u64::from(rng.below(5000));
+                let target = random_call(&mut rng);
+                if let Ok(Press::Created(id)) = group.press(target, now) {
+                    queued.push((target, now, id));
+                }
             }
-        }
-        now += u64::from(rng.below(40_000));
+            now += u64::from(rng.below(40_000));
 
-        // Оракул: матрица и назначение напрямую. Назначений в таблице ещё нет, поэтому
-        // маски вызовов у кабин нулевые. Недостающие столбцы это вызов на этаж 0.
-        let states = cars.map(|car| CarState {
-            up_calls: 0,
-            down_calls: 0,
-            ..car.state
-        });
-        let window: [QueuedCall; WINDOW] = std::array::from_fn(|index| match queued.get(index) {
-            Some(&(target, registered, _)) => QueuedCall {
-                call: target,
-                waited_ms: u32::try_from(now - registered).unwrap_or(u32::MAX),
-            },
-            None => QueuedCall {
-                call: up(0),
-                waited_ms: 0,
-            },
-        });
-        let picks = assign(&build_matrix(&params, &states, &window));
-        let expected: Vec<Event> = picks
-            .iter()
-            .enumerate()
-            .filter_map(|(car, pick)| {
-                pick.map(|column| Event::Assigned {
+            let states: [CarState; 3] = std::array::from_fn(|index| {
+                let (mut up_calls, mut down_calls) = (0_u32, 0_u32);
+                for (target, _, _, car) in &owned {
+                    if usize::from(*car) == index {
+                        let bit = 1_u32 << (target.floor - 1);
+                        match target.direction {
+                            Up => up_calls |= bit,
+                            Down => down_calls |= bit,
+                        }
+                    }
+                }
+                CarState {
+                    up_calls,
+                    down_calls,
+                    ..cars[index].state
+                }
+            });
+            let window: [QueuedCall; WINDOW] =
+                std::array::from_fn(|index| match queued.get(index) {
+                    Some(&(target, registered, _)) => QueuedCall {
+                        call: target,
+                        waited_ms: u32::try_from(now - registered).unwrap_or(u32::MAX),
+                    },
+                    None => QueuedCall {
+                        call: up(0),
+                        waited_ms: 0,
+                    },
+                });
+            let picks = assign(&build_matrix(&params, &states, &window));
+            let picked: Vec<(u8, usize)> = picks
+                .iter()
+                .enumerate()
+                .filter_map(|(car, pick)| pick.map(|column| (car_id(car), column)))
+                .collect();
+            let expected: Vec<Event> = picked
+                .iter()
+                .map(|&(car, column)| Event::Assigned {
                     call: queued[column].0,
                     id: queued[column].2,
-                    car: car_id(car),
+                    car,
                 })
-            })
-            .collect();
+                .collect();
 
-        assert_eq!(
-            step(&mut group, now, &cars),
-            expected,
-            "seed {seed}, вызовы {queued:?}, кабины {cars:?}"
-        );
-        for (target, registered, id) in &queued {
-            let state = record(&group, *target).expect("вызов в таблице");
-            let owner = expected.iter().find_map(|event| match event {
-                Event::Assigned { id: got, car, .. } if got == id => Some(*car),
-                _ => None,
-            });
-            assert_eq!(state.id, *id);
-            assert_eq!(state.registered_ms, *registered);
-            assert_eq!(state.car, owner, "seed {seed}, вызов {target:?}");
             assert_eq!(
-                state.state,
-                if owner.is_some() {
-                    CallState::Assigned
-                } else {
-                    CallState::Queued
-                }
+                step(&mut group, now, &cars),
+                expected,
+                "seed {seed}, раунд {round}, вызовы {queued:?}, закреплённые {owned:?}, кабины {cars:?}"
+            );
+
+            let taken: Vec<u32> = picked.iter().map(|&(_, column)| queued[column].2).collect();
+            for &(car, column) in &picked {
+                let (target, registered, id) = queued[column];
+                owned.push((target, registered, id, car));
+            }
+            queued.retain(|(_, _, id)| !taken.contains(id));
+
+            assert_table(
+                &group,
+                &queued,
+                &owned,
+                &format!("seed {seed}, раунд {round}"),
             );
         }
     }
@@ -375,7 +403,6 @@ fn only_the_oldest_calls_within_the_window_are_considered() {
     assert_eq!(ids, [2, 3], "события: {events:?}");
 }
 
-// Одна кабина на 5-м этаже, давний вызов далеко и свежий вызов рядом.
 fn old_far_and_fresh_near(aging_cap_ms: u32) -> Event {
     let mut group = dispatcher::<1, 18>(aging_cap_ms);
     group.press(up(9), 0).expect("вызов");
@@ -546,7 +573,6 @@ fn a_stop_at_another_floor_or_by_another_car_does_not_arrive_the_call() {
     );
 }
 
-// Вызов `up(4)` у одной из двух кабин; доводит его до `arrived_first` и возвращает кабину.
 fn assigned_up_4(group: &mut Dispatcher<10, 2, 18>, arrived: bool) -> usize {
     group.press(up(4), 100).expect("вызов");
     let events = step(group, 200, &[idle(1), idle(10)]);
@@ -564,6 +590,41 @@ fn assigned_up_4(group: &mut Dispatcher<10, 2, 18>, arrived: bool) -> usize {
         );
     }
     owner
+}
+
+#[test]
+fn an_arrived_call_does_not_add_another_stop_to_the_eta_of_its_car() {
+    let mut group = dispatcher::<2, 18>(0);
+    assert_eq!(assigned_up_4(&mut group, false), 0);
+    let cars = [stopped(4, false), idle(1)];
+    assert_eq!(
+        step(&mut group, 300, &cars),
+        [Event::Arrived {
+            call: up(4),
+            id: 0,
+            car: 0
+        }]
+    );
+
+    let params = params(0);
+    let with_stop = CarState {
+        up_calls: 1 << 3,
+        ..cars[0].state
+    };
+    let target = up(6);
+    let far = eta_ms(&params, &cars[1].state, target).expect("eta");
+    assert!(eta_ms(&params, &cars[0].state, target).expect("eta") < far);
+    assert!(eta_ms(&params, &with_stop, target).expect("eta") > far);
+
+    group.press(target, 400).expect("вызов");
+    assert_eq!(
+        step(&mut group, 500, &cars),
+        [Event::Assigned {
+            call: target,
+            id: 1,
+            car: 0
+        }]
+    );
 }
 
 #[test]
@@ -638,7 +699,6 @@ fn fire_recall_cancels_every_call_and_assigns_nothing() {
     let events = step(&mut group, 200, &[idle(1), idle(5), idle(9)]);
     assert_eq!(events.len(), 3, "события: {events:?}");
 
-    // Все три кабины доехали до своих этажей: вызовы в ARRIVED.
     let mut cars = [idle(1), idle(5), idle(9)];
     for event in &events {
         let Event::Assigned { call, car, .. } = event else {
@@ -648,7 +708,6 @@ fn fire_recall_cancels_every_call_and_assigns_nothing() {
     }
     assert_eq!(step(&mut group, 300, &cars).len(), 3);
 
-    // Четвёртый вызов остаётся в QUEUED, потому что после нажатия шага не было.
     group.press(down(6), 310).expect("вызов");
 
     cars[0] = with_mode(cars[0], CarMode::FireRecall);
@@ -669,14 +728,12 @@ fn fire_recall_cancels_every_call_and_assigns_nothing() {
         assert_eq!(record(&group, target), None, "вызов {target:?}");
     }
 
-    // Вызов, нажатый во время режима, отменяется на ближайшем шаге.
     group.press(up(2), 410).expect("вызов");
     assert_eq!(
         step(&mut group, 420, &cars),
         [Event::Cancelled { call: up(2), id: 4 }]
     );
 
-    // Режим кончился: новые вызовы снова обслуживаются, номера продолжают расти.
     let calm = [idle(1), idle(5), idle(9)];
     group.press(up(2), 510).expect("вызов");
     let events = step(&mut group, 520, &calm);
@@ -693,8 +750,6 @@ fn random_mode(rng: &mut Rng) -> CarMode {
     }
 }
 
-// Случайная трасса на 60 шагов: нажатия, смены режимов, остановки кабин на этажах своих
-// вызовов. После каждого шага проверяются инварианты. Возвращает события всех шагов.
 fn run_trace(seed: u64) -> Vec<Vec<Event>> {
     let mut rng = Rng::new(seed);
     let mut group = dispatcher::<3, WINDOW>(30_000);
@@ -789,7 +844,6 @@ fn random_traces_keep_the_invariants_and_replay_identically() {
             totals[slot] += 1;
         }
     }
-    // Трассы должны проходить по всем событиям, иначе инварианты проверяют пустоту.
     assert!(
         totals.iter().all(|&count| count > 0),
         "не все виды событий встретились (назначено, прибыло, обслужено, возвращено, отменено): {totals:?}"
