@@ -7,6 +7,17 @@ import { stateAt, positionAt, lastEventAt, stepEvent, floorLabel } from './playe
 const line = parseTimeline(raw)
 
 describe('проигрыватель', () => {
+  it('читает источник и сохраняет совместимость с первой версией демо', () => {
+    expect(line.source).toBe('python-demo')
+    expect(parseTimeline({ ...raw, source: 'rust-sil' }).source).toBe('rust-sil')
+    expect(parseTimeline({ ...raw, source: undefined }).source).toBeUndefined()
+    expect(() => parseTimeline({ ...raw, source: 42 })).toThrow()
+  })
+  it('применяет переходы вызовов только для событий CALL и REQUEUE', () => {
+    const extra = { tMs: 0, type: 'NOTE', call: 'H08', state: 'комментарий' }
+    const timeline = parseTimeline({ ...raw, events: [raw.events[0], extra, ...raw.events.slice(1)] })
+    expect(stateAt(timeline, 0, 1).calls).toEqual({})
+  })
   it('совпадает с эталонными целыми миллиметрами Python', () => {
     for (const { car, tMs, positionMm } of golden)
       expect(positionAt(line, car as 'A' | 'B' | 'C', tMs)).toBe(positionMm)

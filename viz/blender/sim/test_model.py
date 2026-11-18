@@ -86,6 +86,10 @@ class DispatchTests(unittest.TestCase):
 
 
 class ScenarioTests(unittest.TestCase):
+    def test_demo_timeline_identifies_its_generator(self):
+        line = scenario()
+        self.assertEqual(line["source"], "python-demo")
+
     def test_failure_requeues_original_call_and_opens_before_served(self):
         line = scenario()
         events = line["events"]
