@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import raw from '../../out/timeline.json'
 import golden from '../../golden.json'
 import { parseTimeline } from './timeline'
-import { stateAt, positionAt, lastEventAt, stepEvent } from './player'
+import { stateAt, positionAt, lastEventAt, stepEvent, floorLabel } from './player'
 
 const line = parseTimeline(raw)
 
@@ -10,6 +10,10 @@ describe('проигрыватель', () => {
   it('совпадает с эталонными целыми миллиметрами Python', () => {
     for (const { car, tMs, positionMm } of golden)
       expect(positionAt(line, car as 'A'|'B'|'C', tMs)).toBe(positionMm)
+  })
+  it('различает точный этаж и остановку между этажами', () => {
+    expect(floorLabel(9000)).toBe('04')
+    expect(floorLabel(16500)).toBe('06–07')
   })
   it('показывает торможение, блокировку и полный сброс', () => {
     expect(stateAt(line, 3100).cars.A.mode).toBe('BRAKING')

@@ -45,6 +45,22 @@ class DispatchTests(unittest.TestCase):
             for p in opt["pairs"]:
                 self.assertIsNotNone(matrix[ord(p["car"])-65][p["column"]])
 
+    def test_forbidden_numeric_cell_never_wins(self):
+        best, greedy = assign([[0], [50], [8]], allowed=[[0], [1], [0]])
+        self.assertEqual([best["pairs"][0]["car"], greedy["pairs"][0]["car"]], ["B", "B"])
+
+    def test_greedy_uses_distance_and_only_currently_free_cars(self):
+        from model import dispatch
+        call = {"id":"X", "registeredMs":0, "floor":3, "direction":"UP"}
+        cars = {"A": dict(position=0, speed=0)}
+        cars.update(B=dict(position=5999, speed=0, wait_ms=5000),
+                    C=dict(position=3000, speed=0))
+        result = dispatch(cars, [call])
+        self.assertEqual(result["greedy"]["pairs"][0]["car"], "C")
+        for state in cars.values():
+            state["wait_ms"] = 3000
+        self.assertEqual(dispatch(cars, [call])["greedy"]["pairs"], [])
+
     def test_ties_are_stable(self):
         opt, _ = assign([[1, 1], [1, 1], [1, 1]])
         self.assertEqual([(p["car"], p["column"]) for p in opt["pairs"]], [("A", 0), ("B", 1)])
