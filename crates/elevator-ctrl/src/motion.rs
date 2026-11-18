@@ -11,6 +11,9 @@
 //! мс. Внутри всё в микрометрах, чтобы округления не накапливались на коротких перегонах.
 //! Скорость на входе считается установившейся (ускорение в этот момент нулевое).
 
+mod trip;
+pub use trip::RestTrip;
+
 const UM: u128 = 1000;
 
 /// Параметры движения кабины.
@@ -90,7 +93,7 @@ impl MotionParams {
         let settle = self.settle(speed_mm_s, accel_mm_s2)?;
         let rest = (u128::from(distance_mm) * UM).checked_sub(settle.path)?;
         Some(saturate(
-            settle.millis + self.stop_time_um(rest, settle.speed)?,
+            settle.millis + self.stop_plan_um(rest, settle.speed)?.duration_ms(),
         ))
     }
 
@@ -113,12 +116,15 @@ impl MotionParams {
     }
 
     // Время до остановки в мс для пути в мкм и скорости в мкм/с с нулевым ускорением.
-    fn stop_time_um(&self, distance: u128, start: u128) -> Option<u128> {
+    fn stop_plan_um(&self, distance: u128, start: u128) -> Option<StopPlan> {
         if self.ramp(0, start).1 > distance {
             return None;
         }
         if distance == 0 {
-            return Some(0);
+            return Some(StopPlan {
+                ramps_ms: 0,
+                cruise_ms: 0,
+            });
         }
 
         // Наибольшая скорость хода, при которой разгон до неё и торможение с неё помещаются.
@@ -134,7 +140,10 @@ impl MotionParams {
         let cruise = low.max(1);
         let (ramps_ms, covered) = self.profile(start, cruise);
         let cruise_ms = (1000 * distance.saturating_sub(covered)).div_ceil(cruise);
-        Some(ramps_ms + cruise_ms)
+        Some(StopPlan {
+            ramps_ms,
+            cruise_ms,
+        })
     }
 
     // Разгон от `start` до `cruise` и торможение с `cruise` до остановки: время в мс и путь
@@ -167,6 +176,17 @@ impl MotionParams {
                 ceil_sqrt_ratio(sum * sum * delta, jerk),
             )
         }
+    }
+}
+
+struct StopPlan {
+    ramps_ms: u128,
+    cruise_ms: u128,
+}
+
+impl StopPlan {
+    const fn duration_ms(&self) -> u128 {
+        self.ramps_ms + self.cruise_ms
     }
 }
 
