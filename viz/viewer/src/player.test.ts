@@ -15,7 +15,10 @@ describe('проигрыватель', () => {
   })
   it('применяет переходы вызовов только для событий CALL и REQUEUE', () => {
     const extra = { tMs: 0, type: 'NOTE', call: 'H08', state: 'комментарий' }
-    const timeline = parseTimeline({ ...raw, events: [raw.events[0], extra, ...raw.events.slice(1)] })
+    const timeline = parseTimeline({
+      ...raw,
+      events: [raw.events[0], extra, ...raw.events.slice(1)],
+    })
     expect(stateAt(timeline, 0, 1).calls).toEqual({})
   })
   it('совпадает с эталонными целыми миллиметрами Python', () => {

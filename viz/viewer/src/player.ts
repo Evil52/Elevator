@@ -79,7 +79,7 @@ export function stateAt(
   const t = Math.max(0, Math.min(line.durationMs, Math.floor(time)))
   const state: Snapshot = {
     cars: {} as Record<Car, Cabin>,
-    calls: {},
+    calls: Object.create(null),
     alarm: null,
     index: eventIndex,
     reset: false,
@@ -91,8 +91,13 @@ export function stateAt(
     if (e.type === 'ALARM') state.alarm = e.car!
     if (e.type === 'LOCKED') locked = e.car
     if (e.type === 'RESET')
-      Object.assign(state, { alarm: null, calls: {}, dispatch: undefined, reset: true })
-    if (e.call && e.state) {
+      Object.assign(state, {
+        alarm: null,
+        calls: Object.create(null),
+        dispatch: undefined,
+        reset: true,
+      })
+    if ((e.type === 'CALL' || e.type === 'REQUEUE') && e.call && e.state) {
       const registered = line.calls.find((c) => c.id === e.call)!
       state.calls[e.call] = { ...registered, state: e.state, car: e.car }
     }

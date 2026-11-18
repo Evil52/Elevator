@@ -991,6 +991,11 @@ main {
   font-weight: 450;
   letter-spacing: 0;
 }
+.matrix-source {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
 .matrix-note {
   display: flex;
   align-items: center;

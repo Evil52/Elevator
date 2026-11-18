@@ -46,6 +46,7 @@ type Door = {
 }
 export type Timeline = {
   schemaVersion: 1
+  source?: string
   durationMs: number
   initial: Record<Car, number>
   calls: Call[]
@@ -77,6 +78,10 @@ export function parseTimeline(data: unknown): Timeline {
   check(
     record(data) && data.schemaVersion === 1 && integer(data.durationMs) && data.durationMs > 0,
     'версия или длительность',
+  )
+  check(
+    data.source === undefined || (typeof data.source === 'string' && data.source.trim().length > 0),
+    'источник записи',
   )
   const { initial, calls, events, motions, doors, durationMs } = data
   check(record(initial) && carIds.every((id) => integer(initial[id])), 'позиции')
@@ -138,10 +143,12 @@ export function parseTimeline(data: unknown): Timeline {
     )
     previous = e.tMs
     if (e.car !== undefined) check(car(e.car), 'кабина')
+    if (e.floor !== undefined) check(floor(e.floor), 'этаж события')
     if (e.type === 'CALL' || e.type === 'REQUEUE')
       check(
         ids.has(e.call) &&
-          ['QUEUED', 'ASSIGNED', 'ARRIVED', 'SERVED'].includes(String(e.state)) &&
+          typeof e.state === 'string' &&
+          ['QUEUED', 'ASSIGNED', 'ARRIVED', 'SERVED'].includes(e.state) &&
           integer(e.registeredMs),
         'переход вызова',
       )

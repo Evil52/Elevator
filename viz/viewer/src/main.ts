@@ -29,12 +29,6 @@ const states: Record<Status, string> = {
   ARRIVED: 'Прибытие',
   SERVED: 'Обслужен',
 }
-const safe = (s: string) =>
-  s.replace(
-    /[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
-  )
-
 function description(e: ModelEvent) {
   if (e.type === 'CALL')
     return e.floor + ' этаж · ' + states[e.state!] + (e.car ? ' · кабина ' + e.car : '')
@@ -52,7 +46,7 @@ function description(e: ModelEvent) {
     DIAGNOSTICS: 'Диагностика блокировки кабины ' + e.car,
     RESET: 'Сценарий сброшен',
   }
-  return titles[e.type] ?? e.type
+  return Object.hasOwn(titles, e.type) ? titles[e.type] : e.type
 }
 iconsIn(document)
 const dialog = el<HTMLDialogElement>('dialog')
@@ -73,6 +67,14 @@ async function start() {
   const response = await fetch(timelineUrl)
   if (!response.ok) throw new Error('Не удалось загрузить timeline.json')
   const line = parseTimeline(await response.json())
+  const demo = line.source === 'python-demo'
+  el('matrix-source').textContent = demo
+    ? 'Демо Python · приближённая ETA'
+    : line.source === 'rust-sil'
+      ? 'Источник: Rust SIL'
+      : line.source
+        ? 'Источник: ' + line.source
+        : 'Источник записи не указан'
   let time = 0,
     index = lastEventAt(line, 0),
     playing = false,
@@ -88,23 +90,23 @@ async function start() {
     { name: 'Авария B1', index: alarmIndex },
     { name: 'Обслуживание', index: line.events.findIndex((e) => e.state === 'SERVED') },
     { name: 'Диагностика', index: line.events.findIndex((e) => e.type === 'DIAGNOSTICS') },
-  ]
-  const phaseButtons = phases
-    .map((p) => '<button data-go="' + p.index + '">' + p.name + '</button>')
-    .join('')
-  el('chapters').innerHTML = phaseButtons
+  ].filter((phase) => phase.index >= 0)
+  const phaseButtons = phases.map((phase) => {
+    const button = document.createElement('button')
+    button.dataset.go = String(phase.index)
+    button.textContent = phase.name
+    return button
+  })
+  el('chapters').replaceChildren(...phaseButtons)
   el('total').textContent = clock(line.durationMs)
   scrub.max = String(line.durationMs)
-  el('event-marks').innerHTML = [...new Set(line.events.map((e) => e.tMs))]
-    .map(
-      (t) =>
-        '<b class="tick ' +
-        (t === line.events[alarmIndex].tMs ? 'alarm' : '') +
-        '" style="left:' +
-        (100 * t) / line.durationMs +
-        '%"></b>',
-    )
-    .join('')
+  const marks = [...new Set(line.events.map((e) => e.tMs))].map((t) => {
+    const mark = document.createElement('b')
+    mark.className = t === line.events[alarmIndex]?.tMs ? 'tick alarm' : 'tick'
+    mark.style.left = (100 * t) / line.durationMs + '%'
+    return mark
+  })
+  el('event-marks').replaceChildren(...marks)
   el('cars').innerHTML = carIds
     .map(
       (id) =>
@@ -266,22 +268,19 @@ async function start() {
     if (index !== lastPanel) {
       el('matrix').innerHTML = matrix(s)
       el('calls').innerHTML = calls(s)
-      el('log').innerHTML = line.events
-        .slice(0, index + 1)
-        .map(
-          (e, i) =>
-            '<button class="log-row" data-log="' +
-            i +
-            '"><time>' +
-            clock(e.tMs) +
-            '</time><span class="log-dot ' +
-            safe(e.type) +
-            '"></span><span>' +
-            safe(description(e)) +
-            '</span></button>',
-        )
-        .reverse()
-        .join('')
+      const logRows = line.events.slice(0, index + 1).map((event, i) => {
+        const button = document.createElement('button')
+        button.className = 'log-row'
+        button.dataset.log = String(i)
+        const time = document.createElement('time')
+        time.textContent = clock(event.tMs)
+        const dot = document.createElement('span')
+        dot.className = 'log-dot'
+        if (['ALARM', 'LOCKED', 'DISPATCH'].includes(event.type)) dot.classList.add(event.type)
+        button.append(time, dot, description(event))
+        return button
+      })
+      el('log').replaceChildren(...logRows.reverse())
       el('journal-count').textContent = index + 1 + ' / ' + line.events.length
       const chapter = phases.filter((p) => p.index <= index).at(-1)
       el('chapters')
@@ -405,7 +404,10 @@ async function start() {
   el('matrix-info').onclick = () =>
     explain(
       'Как считается ETA',
-      '<p>Значение в ячейке — модельное время до точной остановки на этаже. Расчёт учитывает движение, направление и остаток цикла дверей.</p><p>Диспетчер сначала назначает максимум допустимых пар, затем минимизирует сумму ETA. Нажмите итог «Оптимум» или «Жадный выбор», чтобы увидеть соответствующие пары с галочками. Прочерк означает запрет назначения.</p><p>Для сравнения жадный алгоритм обрабатывает вызовы по порядку регистрации. Каждый раз он выбирает ближайшую по расстоянию свободную кабину с завершённым циклом дверей.</p>',
+      (demo
+        ? '<p>В демо Python время до остановки рассчитано по прямому пути с примерным ускорением и остатком цикла дверей. Контрольный сценарий Rust использует собственную модель движения и остановок.</p>'
+        : '<p>Время до остановки, допустимые пары и назначения взяты из загруженной записи.</p>') +
+        '<p>Диспетчер сначала назначает максимум допустимых пар, затем минимизирует сумму ETA. Нажмите итог «Оптимум» или «Жадный выбор», чтобы увидеть соответствующие пары с галочками. Прочерк означает запрет назначения.</p><p>Для сравнения жадный алгоритм обрабатывает вызовы по порядку регистрации. Каждый раз он выбирает ближайшую по расстоянию свободную кабину с завершённым циклом дверей.</p>',
       'matrix',
     )
   el('scenario-info').onclick = () =>

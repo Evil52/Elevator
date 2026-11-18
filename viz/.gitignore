@@ -2,3 +2,8 @@
 __pycache__/
 viewer/node_modules/
 viewer/dist/
+
+/out/*
+!/out/scene.glb
+!/out/timeline.json
+!/out/preview-interface.png
