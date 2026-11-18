@@ -41,16 +41,30 @@ impl MotionParams {
         self.max_speed_mm_s
     }
 
-    /// Путь, который нужен, чтобы остановиться с заданной скорости, в мм.
-    /// Округляется вверх: недооценить тормозной путь опаснее, чем переоценить.
+    /// Путь, который нужен, чтобы остановиться с заданной скорости, в мм, если ускорение
+    /// в этот момент нулевое. Округляется вверх: недооценить тормозной путь опаснее, чем
+    /// переоценить.
     #[must_use]
     pub fn braking_distance_mm(&self, speed_mm_s: u32) -> u32 {
         let (_, micrometres) = self.ramp(0, u128::from(speed_mm_s) * UM);
         saturate(micrometres.div_ceil(UM))
     }
 
+    /// Наименьший путь до остановки для кабины, которая идёт со скоростью `speed_mm_s` и
+    /// разгоняется с ускорением `accel_mm_s2`. Сначала рывок гасит ускорение (скорость ещё
+    /// немного растёт), потом обычное торможение. `None`, если такое состояние невозможно:
+    /// скорость или ускорение выше предела, либо скорость после гашения ускорения выше
+    /// максимальной. Торможение кабины в этой модели не описывается: тормозящую кабину
+    /// считают с нулевым ускорением, это даёт запас по пути.
+    #[must_use]
+    pub fn stopping_distance_mm(&self, speed_mm_s: u32, accel_mm_s2: u32) -> Option<u32> {
+        let settle = self.settle(speed_mm_s, accel_mm_s2)?;
+        let (_, brake_um) = self.ramp(0, settle.speed);
+        Some(saturate((settle.path + brake_um).div_ceil(UM)))
+    }
+
     /// Время, за которое кабина проедет `distance_mm` и остановится ровно в конце пути,
-    /// если сейчас она идёт со скоростью `speed_mm_s` в сторону цели. Миллисекунды,
+    /// если сейчас она идёт со скоростью `speed_mm_s` с нулевым ускорением. Миллисекунды,
     /// округление вверх по каждому участку профиля, поэтому оценка выше идеальной не
     /// больше чем на несколько миллисекунд.
     ///
@@ -59,14 +73,53 @@ impl MotionParams {
     /// до `u32::MAX`.
     #[must_use]
     pub fn time_to_stop_ms(&self, distance_mm: u32, speed_mm_s: u32) -> Option<u32> {
-        if speed_mm_s > self.max_speed_mm_s || distance_mm < self.braking_distance_mm(speed_mm_s) {
+        self.time_to_stop_from_ms(distance_mm, speed_mm_s, 0)
+    }
+
+    /// То же, но кабина сейчас разгоняется с ускорением `accel_mm_s2`: сперва рывок гасит
+    /// ускорение (план, при котором кабина не пытается разгоняться дальше), потом
+    /// профиль из [`Self::time_to_stop_ms`]. Это допустимый план, поэтому оценка
+    /// не ниже идеальной и чуть выше неё.
+    #[must_use]
+    pub fn time_to_stop_from_ms(
+        &self,
+        distance_mm: u32,
+        speed_mm_s: u32,
+        accel_mm_s2: u32,
+    ) -> Option<u32> {
+        let settle = self.settle(speed_mm_s, accel_mm_s2)?;
+        let rest = (u128::from(distance_mm) * UM).checked_sub(settle.path)?;
+        Some(saturate(
+            settle.millis + self.stop_time_um(rest, settle.speed)?,
+        ))
+    }
+
+    // Состояние после гашения ускорения рывком вниз: время в мс, пройденный путь в мкм и
+    // скорость в мкм/с, всё округлено вверх. `None`, если состояние невозможно.
+    fn settle(&self, speed_mm_s: u32, accel_mm_s2: u32) -> Option<Settled> {
+        if speed_mm_s > self.max_speed_mm_s || accel_mm_s2 > self.accel_mm_s2 {
             return None;
         }
-        let distance = u128::from(distance_mm) * UM;
+        let speed = u128::from(speed_mm_s) * UM;
+        let accel = u128::from(accel_mm_s2) * UM;
+        let jerk = u128::from(self.jerk_mm_s3) * UM;
+        let settled = Settled {
+            millis: (1000 * accel).div_ceil(jerk),
+            // Путь за время a/j при падающем с j ускорении: v*a/j + a³/(3*j²).
+            path: (3 * speed * accel * jerk + accel * accel * accel).div_ceil(3 * jerk * jerk),
+            speed: speed + (accel * accel).div_ceil(2 * jerk),
+        };
+        (settled.speed <= u128::from(self.max_speed_mm_s) * UM).then_some(settled)
+    }
+
+    // Время до остановки в мс для пути в мкм и скорости в мкм/с с нулевым ускорением.
+    fn stop_time_um(&self, distance: u128, start: u128) -> Option<u128> {
+        if self.ramp(0, start).1 > distance {
+            return None;
+        }
         if distance == 0 {
             return Some(0);
         }
-        let start = u128::from(speed_mm_s) * UM;
 
         // Наибольшая скорость хода, при которой разгон до неё и торможение с неё помещаются.
         let (mut low, mut high) = (start, u128::from(self.max_speed_mm_s) * UM);
@@ -81,7 +134,7 @@ impl MotionParams {
         let cruise = low.max(1);
         let (ramps_ms, covered) = self.profile(start, cruise);
         let cruise_ms = (1000 * distance.saturating_sub(covered)).div_ceil(cruise);
-        Some(saturate(ramps_ms + cruise_ms))
+        Some(ramps_ms + cruise_ms)
     }
 
     // Разгон от `start` до `cruise` и торможение с `cruise` до остановки: время в мс и путь
@@ -115,6 +168,13 @@ impl MotionParams {
             )
         }
     }
+}
+
+// Результат гашения ускорения.
+struct Settled {
+    millis: u128,
+    path: u128,
+    speed: u128,
 }
 
 fn saturate(value: u128) -> u32 {

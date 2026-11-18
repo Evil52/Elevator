@@ -6,7 +6,8 @@
 //! проверяют маршрут, а не саму кинематику.
 
 use elevator_ctrl::eta::{
-    Building, Call, CarState, Direction, DoorTimes, EtaParams, QueuedCall, build_matrix, eta_ms,
+    Building, Call, CarMode, CarState, Direction, DoorTimes, EtaParams, QueuedCall, build_matrix,
+    eta_ms,
 };
 use elevator_ctrl::motion::MotionParams;
 use elevator_ctrl::{Cell, assign};
@@ -15,7 +16,7 @@ use Direction::{Down, Up};
 
 const FLOORS: u32 = 10;
 const HEIGHT: u32 = 3000;
-const CYCLE: u32 = 10_000;
+const CYCLE: u32 = 11_000;
 
 fn motion() -> MotionParams {
     MotionParams::new(1600, 1000, 1000).expect("движение")
@@ -25,11 +26,7 @@ fn params() -> EtaParams {
     EtaParams {
         building: Building::new(10, HEIGHT).expect("здание"),
         motion: motion(),
-        doors: DoorTimes {
-            open_ms: 2000,
-            dwell_ms: 5000,
-            close_ms: 3000,
-        },
+        doors: DoorTimes::new(2000, 6000, 3000).expect("двери"),
         aging_cap_ms: 0,
     }
 }
@@ -61,12 +58,13 @@ fn idle(floor: u32, heading: Direction) -> CarState {
     CarState {
         position_mm: pos(floor),
         speed_mm_s: 0,
+        accel_mm_s2: 0,
         heading,
         door_remaining_ms: 0,
         up_calls: 0,
         down_calls: 0,
         car_calls: 0,
-        available: true,
+        mode: CarMode::Normal,
     }
 }
 
@@ -147,7 +145,7 @@ fn idle_car_goes_down_to_a_call_below() {
 #[test]
 fn unavailable_car_gets_no_estimate() {
     let car = CarState {
-        available: false,
+        mode: CarMode::Unavailable,
         ..idle(1, Up)
     };
     assert_eq!(eta(&car, 3, Up), None);
@@ -312,7 +310,7 @@ fn matrix_shows_why_the_global_choice_beats_the_nearest_first_one() {
         idle(6, Up),
         idle(10, Down),
         CarState {
-            available: false,
+            mode: CarMode::Unavailable,
             ..idle(1, Up)
         },
     ];
@@ -400,15 +398,22 @@ impl Rng {
         } else {
             (pos(self.below(FLOORS) + 1), 0)
         };
+        // Разгоняется примерно каждая вторая движущаяся кабина.
+        let accel_mm_s2 = if moving && self.below(2) == 0 {
+            self.below(1001)
+        } else {
+            0
+        };
         CarState {
             position_mm,
             speed_mm_s,
+            accel_mm_s2,
             heading,
             door_remaining_ms: self.below(10_000),
             up_calls: self.sparse_mask(),
             down_calls: self.sparse_mask(),
             car_calls: self.sparse_mask() & self.sparse_mask(),
-            available: true,
+            mode: CarMode::Normal,
         }
     }
 }
@@ -498,8 +503,11 @@ fn oracle_up(p: &EtaParams, car: &CarState, target: Call) -> Option<u32> {
         pending.push(target);
     }
 
-    let moving = car.speed_mm_s > 0;
-    let reach = car.position_mm + p.motion.braking_distance_mm(car.speed_mm_s);
+    let moving = car.speed_mm_s > 0 || car.accel_mm_s2 > 0;
+    let stopping = p
+        .motion
+        .stopping_distance_mm(car.speed_mm_s, car.accel_mm_s2)?;
+    let reach = car.position_mm + stopping;
     let ahead: Pending = pending
         .iter()
         .copied()
@@ -552,11 +560,15 @@ fn oracle_up(p: &EtaParams, car: &CarState, target: Call) -> Option<u32> {
     };
     let mut at = car.position_mm;
     let mut speed = car.speed_mm_s;
+    let mut accel = car.accel_mm_s2;
     for (floor, is_virtual, served) in &stops {
-        let travel = p.motion.time_to_stop_ms(pos(*floor).abs_diff(at), speed)?;
+        let travel = p
+            .motion
+            .time_to_stop_from_ms(pos(*floor).abs_diff(at), speed, accel)?;
         clock += u64::from(travel);
         at = pos(*floor);
         speed = 0;
+        accel = 0;
         if served.contains(&target) {
             return Some(u32::try_from(clock).unwrap_or(u32::MAX));
         }
@@ -599,6 +611,7 @@ fn a_standing_car_is_never_faster_than_driving_straight() {
     for _ in 0..20_000 {
         let car = CarState {
             speed_mm_s: 0,
+            accel_mm_s2: 0,
             position_mm: pos(rng.below(FLOORS) + 1),
             ..rng.car()
         };
@@ -668,11 +681,7 @@ fn thirty_two_floors_use_every_bit_of_the_masks() {
 #[test]
 fn door_phases_only_matter_through_their_sum() {
     let split = EtaParams {
-        doors: DoorTimes {
-            open_ms: 1,
-            dwell_ms: 1,
-            close_ms: 9998,
-        },
+        doors: DoorTimes::new(1000, 2000, 8000).expect("двери"),
         ..params()
     };
     let car = with_calls(idle(1, Up), &[4], &[]);
@@ -680,4 +689,75 @@ fn door_phases_only_matter_through_their_sum() {
         eta_ms(&split, &car, call(7, Up)),
         eta_ms(&params(), &car, call(7, Up))
     );
+}
+
+#[test]
+fn door_times_follow_the_en_81_70_dwell_range() {
+    assert!(DoorTimes::new(2000, 6000, 3000).is_some());
+    assert!(DoorTimes::new(2000, 2000, 3000).is_some());
+    assert!(DoorTimes::new(2000, 20_000, 3000).is_some());
+    assert_eq!(DoorTimes::new(2000, 1999, 3000), None);
+    assert_eq!(DoorTimes::new(2000, 20_001, 3000), None);
+    assert_eq!(DoorTimes::new(0, 6000, 3000), None);
+    assert_eq!(DoorTimes::new(2000, 6000, 0), None);
+    assert_eq!(
+        DoorTimes::new(2000, 6000, 3000).map(DoorTimes::cycle_ms),
+        Some(11_000)
+    );
+}
+
+#[test]
+fn only_a_car_in_normal_mode_gets_assignments() {
+    for mode in [
+        CarMode::FireRecall,
+        CarMode::Firefighters,
+        CarMode::Unavailable,
+    ] {
+        let car = CarState {
+            mode,
+            ..idle(1, Up)
+        };
+        assert_eq!(eta(&car, 3, Up), None, "{mode:?}");
+        let matrix = build_matrix(&params(), &[car], &[queued(3, Up, 0)]);
+        assert_eq!(matrix, [[Cell::forbidden(0)]], "{mode:?}");
+    }
+    assert!(CarMode::Normal.accepts_assignments());
+}
+
+#[test]
+fn accelerating_car_needs_a_longer_road_to_stop() {
+    // Кабина на уровне 2-го этажа идёт 1000 мм/с. Если ускорение нулевое, остановиться на
+    // 3-м этаже (3000 мм) успевает: тормозной путь 1000 мм.
+    let steady = CarState {
+        position_mm: pos(2),
+        speed_mm_s: 1000,
+        ..idle(1, Up)
+    };
+    assert_eq!(eta(&steady, 3, Up), Some(drive_from(3000, 1000)));
+    // Если она при этом разгоняется с 1000 мм/с², скорость ещё вырастет до 1500, и
+    // остановка требует около 3208 мм: на 3-м этаже уже не встать. Ближайший этаж, где
+    // успевает, 4-й, потом возврат на 3-й.
+    let accelerating = CarState {
+        accel_mm_s2: 1000,
+        ..steady
+    };
+    let to_fourth = motion()
+        .time_to_stop_from_ms(6000, 1000, 1000)
+        .expect("успевает");
+    assert_eq!(eta(&accelerating, 3, Up), Some(to_fourth + drive(3000)));
+}
+
+#[test]
+fn impossible_acceleration_gets_no_estimate() {
+    let too_hard = CarState {
+        accel_mm_s2: 1001,
+        ..flying()
+    };
+    assert_eq!(eta(&too_hard, 6, Up), None);
+    // Скорость после гашения ускорения вышла бы за максимальную.
+    let overshoot = CarState {
+        accel_mm_s2: 1000,
+        ..flying()
+    };
+    assert_eq!(eta(&overshoot, 6, Up), None);
 }

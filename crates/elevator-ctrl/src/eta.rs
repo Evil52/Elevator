@@ -25,6 +25,31 @@ impl Direction {
     }
 }
 
+/// Режим работы кабины. Назначения получает только кабина в обычном режиме.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CarMode {
+    /// Обычная работа в группе.
+    Normal,
+    /// «Пожарная опасность» (ГОСТ Р 53296-2009, п. 3.3): кабина принудительно уходит на
+    /// основной посадочный этаж, команды из кабины и зарегистрированные вызовы отменяются.
+    FireRecall,
+    /// «Перевозка пожарных подразделений» (там же, п. 3.4): включается после «пожарной
+    /// опасности», кабина выполняет только команды, поданные изнутри.
+    Firefighters,
+    /// Кабина выведена из работы: перегрузка, не подтверждено запирание дверей, сработала
+    /// цепь безопасности, дверь шахты открыта вне зоны дверей, критический вход потерял
+    /// достоверность, либо стоит блокировка после аварийной остановки до `recover_car`.
+    Unavailable,
+}
+
+impl CarMode {
+    /// Можно ли назначать этой кабине вызовы.
+    #[must_use]
+    pub const fn accepts_assignments(self) -> bool {
+        matches!(self, Self::Normal)
+    }
+}
+
 /// Вызов этажа: этаж с единицы и направление кнопки.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Call {
@@ -89,19 +114,36 @@ impl Building {
 /// Времена цикла дверей на остановке, мс.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DoorTimes {
-    /// Открытие.
-    pub open_ms: u32,
-    /// Выдержка в открытом состоянии.
-    pub dwell_ms: u32,
-    /// Закрытие.
-    pub close_ms: u32,
+    // Открытие, выдержка и закрытие, мс.
+    open: u32,
+    dwell: u32,
+    close: u32,
 }
 
 impl DoorTimes {
+    /// Выдержка дверей в открытом состоянии должна регулироваться не уже, чем от 2 до 20 с
+    /// (EN 81-70), для маломобильных пассажиров советуют не меньше 6 с. Поэтому выдержка
+    /// вне этого диапазона и нулевые открытие или закрытие отклоняются.
+    pub const DWELL_RANGE_MS: core::ops::RangeInclusive<u32> = 2000..=20_000;
+
+    /// Времена цикла: открытие, выдержка, закрытие. `None`, если выдержка вне
+    /// [`Self::DWELL_RANGE_MS`] или открытие либо закрытие нулевые.
+    #[must_use]
+    pub fn new(open_ms: u32, dwell_ms: u32, close_ms: u32) -> Option<Self> {
+        if open_ms == 0 || close_ms == 0 || !Self::DWELL_RANGE_MS.contains(&dwell_ms) {
+            return None;
+        }
+        Some(Self {
+            open: open_ms,
+            dwell: dwell_ms,
+            close: close_ms,
+        })
+    }
+
     /// Полный цикл: открытие, выдержка, закрытие.
     #[must_use]
     pub const fn cycle_ms(self) -> u64 {
-        self.open_ms as u64 + self.dwell_ms as u64 + self.close_ms as u64
+        self.open as u64 + self.dwell as u64 + self.close as u64
     }
 }
 
@@ -121,9 +163,11 @@ pub struct EtaParams {
 pub struct CarState {
     /// Положение в мм от нижнего этажа (1-й этаж это 0).
     pub position_mm: u32,
-    /// Модуль скорости, мм/с. Ноль, если кабина стоит. Ускорение в этот момент считается
-    /// нулевым.
+    /// Модуль скорости, мм/с. Ноль, если кабина стоит.
     pub speed_mm_s: u32,
+    /// Ускорение в сторону движения, мм/с², если кабина сейчас разгоняется. Для кабины,
+    /// которая идёт на постоянной скорости или тормозит, ноль (торможение считается с запасом).
+    pub accel_mm_s2: u32,
     /// Куда едет кабина, а если стоит, то куда пойдёт.
     pub heading: Direction,
     /// Сколько ещё нельзя трогаться из-за дверей. Для движущейся кабины не учитывается.
@@ -134,21 +178,25 @@ pub struct CarState {
     pub down_calls: u32,
     /// Этажи, нажатые пассажирами внутри кабины: бит `этаж - 1`.
     pub car_calls: u32,
-    /// Может ли кабина получать назначения (не перегружена, замки подтверждены и так далее).
-    pub available: bool,
+    /// Режим работы: назначения получает только `CarMode::Normal`.
+    pub mode: CarMode,
 }
 
-/// ETA кабины до вызова в миллисекундах. `None`, если кабина недоступна или состояние
-/// невозможно: этаж вне здания, положение за шахтой, скорость выше максимальной,
+/// ETA кабины до вызова в миллисекундах. `None`, если кабина не в обычном режиме или
+/// состояние невозможно: этаж вне здания, положение за шахтой, скорость или ускорение выше
+/// предела,
 /// назначения на несуществующие этажи, остановиться в шахте нельзя.
 #[must_use]
 pub fn eta_ms(params: &EtaParams, car: &CarState, call: Call) -> Option<u32> {
     let building = params.building;
     let floor = u32::from(call.floor);
-    let valid = car.available
+    let valid = car.mode.accepts_assignments()
         && (1..=u32::from(building.floors)).contains(&floor)
         && car.position_mm <= building.top_position_mm()
-        && car.speed_mm_s <= params.motion.max_speed_mm_s()
+        && params
+            .motion
+            .stopping_distance_mm(car.speed_mm_s, car.accel_mm_s2)
+            .is_some()
         && (car.up_calls | car.down_calls | car.car_calls) & !building.all_floors() == 0;
     if !valid {
         return None;
@@ -184,20 +232,28 @@ struct Clock<'a> {
     millis: u64,
     position_mm: u32,
     speed_mm_s: u32,
+    accel_mm_s2: u32,
 }
 
 impl Clock<'_> {
+    // Идёт ли кабина (скорость или разгон ненулевые).
+    const fn moving(&self) -> bool {
+        self.speed_mm_s > 0 || self.accel_mm_s2 > 0
+    }
+
     // Едет к этажу и останавливается там. Возвращает момент остановки. Скорость после
     // остановки нулевая, поэтому начальная скорость влияет только на первый перегон.
     fn drive_to(&mut self, floor: u32) -> Option<u64> {
         let target = self.params.building.position_mm(floor);
-        let travel = self
-            .params
-            .motion
-            .time_to_stop_ms(target.abs_diff(self.position_mm), self.speed_mm_s)?;
+        let travel = self.params.motion.time_to_stop_from_ms(
+            target.abs_diff(self.position_mm),
+            self.speed_mm_s,
+            self.accel_mm_s2,
+        )?;
         self.millis += u64::from(travel);
         self.position_mm = target;
         self.speed_mm_s = 0;
+        self.accel_mm_s2 = 0;
         Some(self.millis)
     }
 
@@ -241,9 +297,12 @@ impl<'a> Route<'a> {
             Direction::Up => up |= target,
             Direction::Down => down |= target,
         }
-        let moving = car.speed_mm_s > 0;
-        let reach = u64::from(car.position_mm)
-            + u64::from(params.motion.braking_distance_mm(car.speed_mm_s));
+        let moving = car.speed_mm_s > 0 || car.accel_mm_s2 > 0;
+        let stopping = params
+            .motion
+            .stopping_distance_mm(car.speed_mm_s, car.accel_mm_s2)
+            .unwrap_or(u32::MAX);
+        let reach = u64::from(car.position_mm) + u64::from(stopping);
         let first_ahead = reach.div_ceil(u64::from(building.floor_height_mm)) + 1;
         Self {
             clock: Clock {
@@ -256,6 +315,7 @@ impl<'a> Route<'a> {
                 },
                 position_mm: car.position_mm,
                 speed_mm_s: car.speed_mm_s,
+                accel_mm_s2: car.accel_mm_s2,
             },
             call,
             floors: u32::from(building.floors),
@@ -303,7 +363,7 @@ impl<'a> Route<'a> {
         if pending == 0 {
             // Впереди дел нет. Движущаяся кабина всё равно должна остановиться: тормозит
             // на ближайшем этаже, куда успевает, без открытия дверей.
-            if self.clock.speed_mm_s > 0 {
+            if self.clock.moving() {
                 if self.first_ahead > self.floors {
                     return None;
                 }

@@ -32,6 +32,34 @@ fn braking_distance_covers_three_phase_and_two_phase_ramps() {
 }
 
 #[test]
+fn stopping_distance_of_an_accelerating_car_includes_the_jerk_down_phase() {
+    let p = params();
+    // Без ускорения совпадает с тормозным путём.
+    assert_eq!(p.stopping_distance_mm(1000, 0), Some(1000));
+    // 500 мм/с с ускорением 1000 мм/с²: рывок гасит ускорение за 1 с, путь 500 + 333,33 мм,
+    // скорость вырастет до 1000 мм/с, торможение с неё ещё 1000 мм: 1833,33, вверх 1834.
+    assert_eq!(p.stopping_distance_mm(500, 1000), Some(1834));
+    // Ускорение выше предела и скорость после гашения выше максимальной невозможны.
+    assert_eq!(p.stopping_distance_mm(500, 1001), None);
+    assert_eq!(p.stopping_distance_mm(1500, 1000), None);
+}
+
+#[test]
+fn time_for_an_accelerating_car_is_the_settle_time_plus_the_stop() {
+    // 500 мм/с с ускорением 1000 мм/с²: гашение 1 с (833,33 мм), потом скорость 1000 мм/с и
+    // оставшиеся 1000,67 мм: торможение 2000 мс и ещё немного. Итого около 3000 мс.
+    let ms = params()
+        .time_to_stop_from_ms(1834, 500, 1000)
+        .expect("достижимо");
+    assert!((3000..=3010).contains(&ms), "{ms}");
+    assert_eq!(params().time_to_stop_from_ms(1833, 500, 1000), None);
+    assert_eq!(
+        params().time_to_stop_from_ms(5000, 800, 0),
+        params().time_to_stop_ms(5000, 800)
+    );
+}
+
+#[test]
 fn standing_still_at_the_target_takes_no_time() {
     assert_eq!(params().time_to_stop_ms(0, 0), Some(0));
 }
@@ -117,16 +145,26 @@ fn ramp(v1: f64, v2: f64, accel: f64, jerk: f64) -> (f64, f64) {
 // Независимый эталон на f64: идеальное время в миллисекундах без округлений, скорость хода
 // подбирается делением пополам.
 fn ideal_ms(max_speed: u32, accel: u32, jerk: u32, distance: u32, speed: u32) -> f64 {
+    ideal_ms_from(
+        max_speed,
+        accel,
+        jerk,
+        f64::from(distance),
+        f64::from(speed),
+    )
+}
+
+// То же для дробных пути и скорости.
+fn ideal_ms_from(max_speed: u32, accel: u32, jerk: u32, distance: f64, speed: f64) -> f64 {
     let (vmax, a, j) = (f64::from(max_speed), f64::from(accel), f64::from(jerk));
-    let (d, v0) = (f64::from(distance), f64::from(speed));
-    let covered = |vc: f64| ramp(v0, vc, a, j).1 + ramp(0.0, vc, a, j).1;
-    let cruise_speed = if covered(vmax) <= d {
+    let covered = |vc: f64| ramp(speed, vc, a, j).1 + ramp(0.0, vc, a, j).1;
+    let cruise_speed = if covered(vmax) <= distance {
         vmax
     } else {
-        let (mut low, mut high) = (v0, vmax);
+        let (mut low, mut high) = (speed, vmax);
         for _ in 0..200 {
             let mid = f64::midpoint(low, high);
-            if covered(mid) <= d {
+            if covered(mid) <= distance {
                 low = mid;
             } else {
                 high = mid;
@@ -134,9 +172,9 @@ fn ideal_ms(max_speed: u32, accel: u32, jerk: u32, distance: u32, speed: u32) ->
         }
         low
     };
-    let ramps = ramp(v0, cruise_speed, a, j).0 + ramp(0.0, cruise_speed, a, j).0;
+    let ramps = ramp(speed, cruise_speed, a, j).0 + ramp(0.0, cruise_speed, a, j).0;
     let cruise = if cruise_speed > 0.0 {
-        (d - covered(cruise_speed)).max(0.0) / cruise_speed
+        (distance - covered(cruise_speed)).max(0.0) / cruise_speed
     } else {
         0.0
     };
@@ -191,6 +229,53 @@ fn longer_distance_takes_no_less_time_up_to_one_millisecond() {
                 "время уменьшилось при росте пути: {last} -> {now}"
             );
             last = now;
+        }
+    }
+}
+
+// Идеальное время для кабины, которая разгоняется: рывок гасит ускорение, дальше обычный профиль.
+fn ideal_ms_accelerating(
+    max_speed: u32,
+    accel: u32,
+    jerk: u32,
+    distance: u32,
+    speed: u32,
+    a0: u32,
+) -> f64 {
+    let (j, v0, a0) = (f64::from(jerk), f64::from(speed), f64::from(a0));
+    let settle_s = a0 / j;
+    let path = v0 * settle_s + a0 * settle_s * settle_s / 2.0 - j * settle_s.powi(3) / 6.0;
+    let v1 = v0 + a0 * a0 / (2.0 * j);
+    settle_s * 1000.0 + ideal_ms_from(max_speed, accel, jerk, f64::from(distance) - path, v1)
+}
+
+#[test]
+fn random_accelerating_cases_stay_close_to_the_ideal_plan() {
+    let mut rng = Rng(0xDEAD_BEEF_1234_5678);
+    for _ in 0..20_000 {
+        let max_speed = rng.range(400, 6000);
+        let accel = rng.range(200, 3000);
+        let jerk = rng.range(200, 5000);
+        let speed = rng.range(0, max_speed);
+        let a0 = rng.range(0, accel);
+        let distance = rng.range(1, 60_000);
+        let p = MotionParams::new(max_speed, accel, jerk).expect("не нулевые");
+
+        let case = format!("vmax={max_speed} a={accel} j={jerk} d={distance} v0={speed} a0={a0}");
+        let stopping = p.stopping_distance_mm(speed, a0);
+        let got = p.time_to_stop_from_ms(distance, speed, a0);
+        assert_eq!(
+            got.is_some(),
+            stopping.is_some_and(|s| distance >= s),
+            "{case}"
+        );
+        if let Some(ms) = got {
+            let ideal = ideal_ms_accelerating(max_speed, accel, jerk, distance, speed, a0);
+            let ms = f64::from(ms);
+            assert!(
+                ms >= ideal - 1e-3 && ms <= ideal + 6.0,
+                "{case}: получили {ms}, идеально {ideal}"
+            );
         }
     }
 }
