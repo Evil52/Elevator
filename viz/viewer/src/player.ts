@@ -1,5 +1,10 @@
 import { carIds, type Car, type Call, type Dispatch, type Motion, type Status, type Timeline } from './timeline'
 
+export function floorLabel(positionMm:number) {
+  const level = Math.floor(positionMm / 3000) + 1
+  const label = (n:number) => String(n).padStart(2,'0')
+  return positionMm % 3000 === 0 ? label(level) : label(level)+'–'+label(level+1)
+}
 function round(n: bigint, d: bigint) {
   const sign = n < 0n ? -1n : 1n
   return Number(sign * ((2n * n * sign + d) / (2n * d)))

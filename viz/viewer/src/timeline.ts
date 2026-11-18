@@ -4,7 +4,7 @@ export type Status = 'QUEUED' | 'ASSIGNED' | 'ARRIVED' | 'SERVED'
 export type Call = { id: string; floor: number; direction: 'UP'|'DOWN'; registeredMs: number }
 export type Pair = {car: Car; column: number; etaMs: number}
 export type Result = {pairs: Pair[]; totalEtaMs: number}
-export type Dispatch = { rows: Car[]; columns: string[]; matrix: (number|null)[][]; optimal: Result; greedy: Result }
+export type Dispatch = { allowed:number[][]; rows: Car[]; columns: string[]; matrix: (number|null)[][]; optimal: Result; greedy: Result }
 export type ModelEvent = {tMs: number; type: string; car?: Car; floor?: number; call?: string; state?: Status; registeredMs?: number}
 export type Phase = {dtMs: number; xMm: number; dxMm: number; v0MmPerSec: number; v1MmPerSec: number}
 export type Motion = {car: Car; t0Ms: number; t1Ms: number; fromMm: number; toMm: number; profile: Phase[]}
@@ -46,14 +46,16 @@ export function parseTimeline(data: unknown): Timeline {
     if (e.type === 'CALL' || e.type === 'REQUEUE')
       check(ids.has(e.call) && ['QUEUED','ASSIGNED','ARRIVED','SERVED'].includes(String(e.state)) && integer(e.registeredMs), 'переход вызова')
     if (e.type === 'DISPATCH') {
-      const { rows, columns, matrix, optimal, greedy } = e
+      const { rows, columns, matrix, allowed, optimal, greedy } = e
       check(Array.isArray(rows) && rows.length === 3 && rows.every((id,i) => id === carIds[i]) &&
         Array.isArray(columns) && columns.every(id => ids.has(id)) && Array.isArray(matrix) &&
         matrix.length === rows.length && matrix.every(row => Array.isArray(row) && row.length === columns.length &&
           row.every(v => v === null || (integer(v) && v >= 0))), 'матрица ETA')
+      check(Array.isArray(allowed) && allowed.length === rows.length && allowed.every(row =>
+        Array.isArray(row) && row.length === columns.length && row.every(x => x === 0 || x === 1)), 'допустимость пар')
       for (const plan of [optimal, greedy])
         check(record(plan) && integer(plan.totalEtaMs) && Array.isArray(plan.pairs) && plan.pairs.every(p =>
-          record(p) && car(p.car) && integer(p.column) && integer(p.etaMs) && matrix[rows.indexOf(p.car)][p.column] === p.etaMs), 'назначения')
+          record(p) && car(p.car) && integer(p.column) && integer(p.etaMs) && allowed[rows.indexOf(p.car)][p.column] === 1 && matrix[rows.indexOf(p.car)][p.column] === p.etaMs), 'назначения')
     }
   }
   check(previous === durationMs && events.at(-1).type === 'RESET', 'конец')

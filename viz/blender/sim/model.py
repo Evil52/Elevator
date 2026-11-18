@@ -100,21 +100,25 @@ def eta(position, speed, floor, direction, wait_ms=0, target_floor=None, locked=
     return wait_ms + sum(dt for dt, _, _ in travel_phases(abs(distance), abs(speed)))
 
 
-def assign(matrix):
+def assign(matrix, allowed=None, distances=None, free=None):
     # Перебор частичных инъективных назначений. Строки по id, столбцы по регистрации.
     n = len(matrix[0])
+    if allowed is None:
+        allowed = [[int(value is not None) for value in row] for row in matrix]
+    if distances is None:
+        distances = matrix
     best_key, best = None, ()
     for cols in itertools.product(range(n + 1), repeat=len(CARS)):
         pairs = [(r, c) for r, c in enumerate(cols) if c != n]
-        if len({c for _, c in pairs}) != len(pairs) or any(matrix[r][c] is None for r, c in pairs):
+        if len({c for _, c in pairs}) != len(pairs) or any(not allowed[r][c] or matrix[r][c] is None for r, c in pairs):
             continue
         key = (-len(pairs), sum(matrix[r][c] for r, c in pairs), cols)
         if best_key is None or key < best_key:
             best_key, best = key, pairs
-    greedy, available = [], set(range(len(CARS)))
+    greedy, available = [], set(range(len(CARS)) if free is None else free)
     for c in range(n):
-        r = min((r for r in available if matrix[r][c] is not None),
-                key=lambda r: (matrix[r][c], r), default=None)
+        r = min((r for r in available if allowed[r][c] and matrix[r][c] is not None),
+                key=lambda r: (distances[r][c], r), default=None)
         if r is not None:
             greedy.append((r, c))
             available.remove(r)
@@ -129,8 +133,12 @@ def dispatch(cars, calls):
     calls = sorted(calls, key=lambda c: (c["registeredMs"], c["id"]))
     matrix = [[eta(**cars[car], floor=c["floor"], direction=c["direction"])
                for c in calls] for car in CARS]
-    opt, greedy = assign(matrix)
-    return dict(columns=[c["id"] for c in calls], rows=list(CARS), matrix=matrix, optimal=opt, greedy=greedy)
+    allowed = [[int(value is not None) for value in row] for row in matrix]
+    distances = [[abs(cars[car]["position"] - height(c["floor"])) for c in calls] for car in CARS]
+    free = [i for i, car in enumerate(CARS) if not cars[car].get("target_floor")
+            and not cars[car].get("wait_ms") and not cars[car]["speed"]]
+    opt, greedy = assign(matrix, allowed, distances, free)
+    return dict(columns=[c["id"] for c in calls], rows=list(CARS), matrix=matrix, allowed=allowed, optimal=opt, greedy=greedy)
 
 
 def scenario():
@@ -240,6 +248,7 @@ def serialize(line):
 if __name__ == "__main__":
     out = VIZ / "out" / "timeline.json"
     out.parent.mkdir(exist_ok=True)
-    out.write_bytes(serialize(scenario()))
-    print(f"{out}: {len(scenario()['events'])} событий")
+    line = scenario()
+    out.write_bytes(serialize(line))
+    print(f"{out}: {len(line['events'])} событий")
 

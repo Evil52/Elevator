@@ -66,6 +66,20 @@
           22400
         ]
       ],
+      "allowed": [
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ]
+      ],
       "optimal": {
         "pairs": [
           {
@@ -164,6 +178,17 @@
           19400
         ]
       ],
+      "allowed": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          1
+        ]
+      ],
       "optimal": {
         "pairs": [
           {
@@ -175,14 +200,8 @@
         "totalEtaMs": 19400
       },
       "greedy": {
-        "pairs": [
-          {
-            "car": "C",
-            "column": 0,
-            "etaMs": 19400
-          }
-        ],
-        "totalEtaMs": 19400
+        "pairs": [],
+        "totalEtaMs": 0
       }
     },
     {
