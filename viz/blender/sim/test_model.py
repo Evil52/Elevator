@@ -107,6 +107,14 @@ class ScenarioTests(unittest.TestCase):
                                     and d["t1Ms"] == e["tMs"] and d["toPermille"] == 1000 for d in line["doors"]))
         self.assertEqual([e["type"] for e in events[-2:]], ["DIAGNOSTICS", "RESET"])
 
+    def test_interrupted_profile_ends_at_emergency_brake(self):
+        line = scenario()
+        for move in line["motions"]:
+            self.assertEqual(sum(p["dtMs"] for p in move["profile"]), move["t1Ms"] - move["t0Ms"])
+            self.assertEqual(sum(p["dxMm"] for p in move["profile"]), move["toMm"] - move["fromMm"])
+        before, brake = [m for m in line["motions"] if m["car"] == "A"]
+        self.assertEqual(before["profile"][-1]["v1MmPerSec"], brake["profile"][0]["v0MmPerSec"])
+
     def test_determinism_and_integer_data(self):
         raw = serialize(scenario())
         self.assertEqual(raw, serialize(scenario()))
