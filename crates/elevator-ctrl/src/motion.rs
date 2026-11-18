@@ -1,26 +1,37 @@
 //! Кинематика кабины для расчёта ETA: целые числа, без `f32`/`f64`.
 //!
-//! Единицы: путь в миллиметрах, скорость в мм/с, ускорение в мм/с², время в миллисекундах.
-//! Профиль упрощённый: разгон и торможение с постоянным ускорением, между ними ход на
-//! максимальной скорости. Рывок не учитывается. Параметры примерные, их ещё утвердят.
+//! Движение с ограничением скорости, ускорения и рывка (S-кривая). Разгон от скорости
+//! `v1` до `v2` идёт так: рывок растит ускорение до предела, ускорение держится, рывок
+//! его снимает. Если до предела ускорение не успевает вырасти, остаются две фазы рывка.
+//! Торможение зеркально разгону. Между разгоном и торможением кабина идёт на постоянной
+//! скорости, которую выбираем как можно выше (но не выше максимальной), чтобы весь путь
+//! уложился.
+//!
+//! Единицы снаружи: путь в мм, скорость в мм/с, ускорение в мм/с², рывок в мм/с³, время в
+//! мс. Внутри всё в микрометрах, чтобы округления не накапливались на коротких перегонах.
+//! Скорость на входе считается установившейся (ускорение в этот момент нулевое).
+
+const UM: u128 = 1000;
 
 /// Параметры движения кабины.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MotionParams {
     max_speed_mm_s: u32,
     accel_mm_s2: u32,
+    jerk_mm_s3: u32,
 }
 
 impl MotionParams {
-    /// Параметры движения. `None`, если скорость или ускорение равны нулю.
+    /// Параметры движения. `None`, если скорость, ускорение или рывок равны нулю.
     #[must_use]
-    pub const fn new(max_speed_mm_s: u32, accel_mm_s2: u32) -> Option<Self> {
-        if max_speed_mm_s == 0 || accel_mm_s2 == 0 {
+    pub const fn new(max_speed_mm_s: u32, accel_mm_s2: u32, jerk_mm_s3: u32) -> Option<Self> {
+        if max_speed_mm_s == 0 || accel_mm_s2 == 0 || jerk_mm_s3 == 0 {
             return None;
         }
         Some(Self {
             max_speed_mm_s,
             accel_mm_s2,
+            jerk_mm_s3,
         })
     }
 
@@ -34,14 +45,14 @@ impl MotionParams {
     /// Округляется вверх: недооценить тормозной путь опаснее, чем переоценить.
     #[must_use]
     pub fn braking_distance_mm(&self, speed_mm_s: u32) -> u32 {
-        let speed = u128::from(speed_mm_s);
-        let accel = u128::from(self.accel_mm_s2);
-        saturate((speed * speed).div_ceil(2 * accel))
+        let (_, micrometres) = self.ramp(0, u128::from(speed_mm_s) * UM);
+        saturate(micrometres.div_ceil(UM))
     }
 
     /// Время, за которое кабина проедет `distance_mm` и остановится ровно в конце пути,
     /// если сейчас она идёт со скоростью `speed_mm_s` в сторону цели. Миллисекунды,
-    /// округление вверх.
+    /// округление вверх по каждому участку профиля, поэтому оценка выше идеальной не
+    /// больше чем на несколько миллисекунд.
     ///
     /// `None`, если остановиться точно в цели нельзя: скорость больше максимальной или
     /// тормозной путь длиннее `distance_mm`. Результат, не влезающий в `u32`, обрезается
@@ -51,26 +62,58 @@ impl MotionParams {
         if speed_mm_s > self.max_speed_mm_s || distance_mm < self.braking_distance_mm(speed_mm_s) {
             return None;
         }
-        let top = u128::from(self.max_speed_mm_s);
-        let accel = u128::from(self.accel_mm_s2);
-        let dist = u128::from(distance_mm);
-        let speed = u128::from(speed_mm_s);
+        let distance = u128::from(distance_mm) * UM;
+        if distance == 0 {
+            return Some(0);
+        }
+        let start = u128::from(speed_mm_s) * UM;
 
-        // Разгон до `top`, ход и торможение укладываются в путь, если 2·a·d + v0² >= 2·top².
-        let millis = if 2 * accel * dist + speed * speed >= 2 * top * top {
-            // t = 1000 · (2·top² - 2·top·v0 + v0² + 2·a·d) / (2·a·top)
-            let numerator =
-                1000 * (2 * top * top + speed * speed + 2 * accel * dist - 2 * top * speed);
-            numerator.div_ceil(2 * accel * top)
+        // Наибольшая скорость хода, при которой разгон до неё и торможение с неё помещаются.
+        let (mut low, mut high) = (start, u128::from(self.max_speed_mm_s) * UM);
+        while low < high {
+            let mid = low + (high - low).div_ceil(2);
+            if self.profile(start, mid).1 <= distance {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        let cruise = low.max(1);
+        let (ramps_ms, covered) = self.profile(start, cruise);
+        let cruise_ms = (1000 * distance.saturating_sub(covered)).div_ceil(cruise);
+        Some(saturate(ramps_ms + cruise_ms))
+    }
+
+    // Разгон от `start` до `cruise` и торможение с `cruise` до остановки: время в мс и путь
+    // в мкм, оба округлены вверх.
+    fn profile(&self, start: u128, cruise: u128) -> (u128, u128) {
+        let (accel_ms, accel_um) = self.ramp(start, cruise);
+        let (brake_ms, brake_um) = self.ramp(0, cruise);
+        (accel_ms + brake_ms, accel_um + brake_um)
+    }
+
+    // Разгон от скорости `from` до `to` (мкм/с, `from <= to`): время в мс и путь в мкм,
+    // округлены вверх. Среднее значение скорости у симметричной S-кривой равно полусумме
+    // начальной и конечной, поэтому путь это полусумма на время.
+    fn ramp(&self, from: u128, to: u128) -> (u128, u128) {
+        let delta = to - from;
+        let sum = from + to;
+        let accel = u128::from(self.accel_mm_s2) * UM;
+        let jerk = u128::from(self.jerk_mm_s3) * UM;
+        if delta * jerk >= accel * accel {
+            // Три фазы: время дельта/a + a/j.
+            let numerator = delta * jerk + accel * accel;
+            (
+                (1000 * numerator).div_ceil(accel * jerk),
+                (sum * numerator).div_ceil(2 * accel * jerk),
+            )
         } else {
-            // Пика `top` не достигаем: пик p = sqrt(a·d + v0²/2), t = 1000 · (2p - v0) / a.
-            // Берём наименьшее целое T, при котором (T·a + 1000·v0)² >= 10^6 · (4·a·d + 2·v0²).
-            let squared = 1_000_000 * (4 * accel * dist + 2 * speed * speed);
-            ceil_sqrt(squared)
-                .saturating_sub(1000 * speed)
-                .div_ceil(accel)
-        };
-        Some(saturate(millis))
+            // Две фазы рывка: время 2 * sqrt(дельта / j).
+            (
+                ceil_sqrt_ratio(4_000_000 * delta, jerk),
+                ceil_sqrt_ratio(sum * sum * delta, jerk),
+            )
+        }
     }
 }
 
@@ -82,4 +125,10 @@ fn saturate(value: u128) -> u32 {
 fn ceil_sqrt(n: u128) -> u128 {
     let root = n.isqrt();
     if root * root < n { root + 1 } else { root }
+}
+
+// Наименьшее целое t, при котором t² * den >= num. Целое t² не меньше num / den ровно тогда,
+// когда оно не меньше num / den, округлённого вверх.
+fn ceil_sqrt_ratio(num: u128, den: u128) -> u128 {
+    ceil_sqrt(num.div_ceil(den))
 }

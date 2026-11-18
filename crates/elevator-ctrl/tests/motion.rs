@@ -1,31 +1,33 @@
-//! Тесты кинематики кабины.
+//! Тесты кинематики кабины (S-кривая).
 //!
-//! Примерные параметры из README: скорость 3 м/с и ускорение 1,5 м/с², то есть
-//! 3000 мм/с и 1500 мм/с². Тормозной путь с полной скорости 3000 мм (ровно один этаж),
-//! время разгона до полной скорости 2 с.
+//! Параметры: 1600 мм/с (номинальная скорость из ряда ГОСТ 5746), ускорение 1000 мм/с²,
+//! рывок 1000 мм/с³. Разгон с места до 1600 мм/с: три фазы, 2600 мс и 2080 мм. Время
+//! разгона до скорости `v` при `v >= 1000` это `v / 1000 + 1` с.
 
 use elevator_ctrl::motion::MotionParams;
 
 fn params() -> MotionParams {
-    MotionParams::new(3000, 1500).expect("параметры не нулевые")
+    MotionParams::new(1600, 1000, 1000).expect("параметры не нулевые")
 }
 
 #[test]
-fn zero_speed_or_acceleration_is_rejected() {
-    assert_eq!(MotionParams::new(0, 1500), None);
-    assert_eq!(MotionParams::new(3000, 0), None);
-    assert_eq!(MotionParams::new(0, 0), None);
-    assert!(MotionParams::new(1, 1).is_some());
+fn zero_speed_acceleration_or_jerk_is_rejected() {
+    assert_eq!(MotionParams::new(0, 1000, 1000), None);
+    assert_eq!(MotionParams::new(1600, 0, 1000), None);
+    assert_eq!(MotionParams::new(1600, 1000, 0), None);
+    assert!(MotionParams::new(1, 1, 1).is_some());
 }
 
 #[test]
-fn braking_distance_is_v_squared_over_two_a_rounded_up() {
+fn braking_distance_covers_three_phase_and_two_phase_ramps() {
     let p = params();
     assert_eq!(p.braking_distance_mm(0), 0);
-    assert_eq!(p.braking_distance_mm(3000), 3000);
-    assert_eq!(p.braking_distance_mm(1500), 750);
-    // 1000² / 3000 = 333,33: округляем вверх.
-    assert_eq!(p.braking_distance_mm(1000), 334);
+    // 1600 мм/с: три фазы, 2080 мм.
+    assert_eq!(p.braking_distance_mm(1600), 2080);
+    // 1000 мм/с: граница между режимами, 1000 мм.
+    assert_eq!(p.braking_distance_mm(1000), 1000);
+    // 500 мм/с: две фазы рывка, 500 * sqrt(500 / 1000) = 353,55 мм, вверх 354.
+    assert_eq!(p.braking_distance_mm(500), 354);
     assert_eq!(p.braking_distance_mm(1), 1);
 }
 
@@ -35,77 +37,53 @@ fn standing_still_at_the_target_takes_no_time() {
 }
 
 #[test]
-fn from_rest_over_nine_floors_is_a_trapezoid() {
-    // 27 000 мм: разгон 3000 мм за 2 с и торможение 3000 мм за 2 с, остальные 21 000 мм
-    // хода по 3000 мм/с это 7 с. Итого 11 с.
-    assert_eq!(params().time_to_stop_ms(27_000, 0), Some(11_000));
+fn from_rest_the_ramps_are_exact_and_the_rest_is_cruise() {
+    let p = params();
+    // 4160 мм ровно на разгон и торможение: 2 * 2600 мс, хода нет.
+    assert_eq!(p.time_to_stop_ms(4160, 0), Some(5200));
+    // Ещё 1600 мм хода на 1600 мм/с: плюс секунда.
+    assert_eq!(p.time_to_stop_ms(5760, 0), Some(6200));
+    // 27 000 мм: ход 22 840 мм за 14,275 с.
+    assert_eq!(p.time_to_stop_ms(27_000, 0), Some(19_475));
 }
 
 #[test]
-fn from_rest_three_floors_is_a_trapezoid() {
-    // 9000 мм: разгон 3000 мм за 2 с, ход 3000 мм за 1 с, торможение 3000 мм за 2 с.
-    assert_eq!(params().time_to_stop_ms(9000, 0), Some(5000));
-}
-
-#[test]
-fn from_rest_exactly_at_the_trapezoid_boundary() {
-    // 6000 мм: разгон и торможение без хода: 2 + 2 с.
-    assert_eq!(params().time_to_stop_ms(6000, 0), Some(4000));
-}
-
-#[test]
-fn from_rest_one_floor_is_a_triangle_rounded_up() {
-    // Пик скорости не достигается: t = 2 * sqrt(3000 / 1500) = 2,8284 с, вверх 2829 мс.
-    assert_eq!(params().time_to_stop_ms(3000, 0), Some(2829));
-}
-
-#[test]
-fn from_rest_one_millimetre_is_rounded_up_to_whole_milliseconds() {
-    // 2 * sqrt(1 / 1500) = 51,64 мс.
-    assert_eq!(params().time_to_stop_ms(1, 0), Some(52));
+fn from_rest_over_one_floor_the_peak_speed_is_below_the_maximum() {
+    // Пик vc: vc * (vc + 1000) / 1000 = 3000, vc = 1302,78 мм/с, время 2 * (vc / 1000 + 1) =
+    // 4605,55 мс. Округления вверх добавляют до трёх миллисекунд.
+    let ms = params().time_to_stop_ms(3000, 0).expect("достижимо");
+    assert!((4606..=4609).contains(&ms), "{ms}");
 }
 
 #[test]
 fn at_full_speed_exactly_the_braking_distance_takes_the_braking_time() {
-    assert_eq!(params().time_to_stop_ms(3000, 3000), Some(2000));
+    assert_eq!(params().time_to_stop_ms(2080, 1600), Some(2600));
 }
 
 #[test]
 fn at_full_speed_with_extra_distance_cruises_first() {
-    // 3000 мм хода за 1 с и торможение 2 с.
-    assert_eq!(params().time_to_stop_ms(6000, 3000), Some(3000));
-}
-
-#[test]
-fn at_half_speed_accelerates_cruises_and_brakes() {
-    // Разгон 1500 до 3000 за 1 с (2250 мм), торможение 2 с (3000 мм), ход 3750 мм за 1,25 с.
-    assert_eq!(params().time_to_stop_ms(9000, 1500), Some(4250));
-}
-
-#[test]
-fn at_half_speed_on_a_short_way_the_peak_is_below_the_maximum() {
-    // Пик sqrt(1500 * 3000 + 1500² / 2) = 2371,7 мм/с, t = (2 * 2371,7 - 1500) / 1500 = 2,1623 с.
-    assert_eq!(params().time_to_stop_ms(3000, 1500), Some(2163));
+    // 1600 мм хода за секунду, потом торможение 2600 мс.
+    assert_eq!(params().time_to_stop_ms(3680, 1600), Some(3600));
 }
 
 #[test]
 fn cannot_stop_at_the_target_if_braking_needs_more_road() {
     let p = params();
-    assert_eq!(p.time_to_stop_ms(2999, 3000), None);
-    assert_eq!(p.time_to_stop_ms(749, 1500), None);
-    assert_eq!(p.time_to_stop_ms(750, 1500), Some(1000));
+    assert_eq!(p.time_to_stop_ms(2079, 1600), None);
+    assert_eq!(p.time_to_stop_ms(999, 1000), None);
+    assert!(p.time_to_stop_ms(1000, 1000).is_some());
     assert_eq!(p.time_to_stop_ms(0, 1), None);
 }
 
 #[test]
 fn speed_above_the_maximum_is_rejected() {
-    assert_eq!(params().time_to_stop_ms(100_000, 3001), None);
+    assert_eq!(params().time_to_stop_ms(100_000, 1601), None);
 }
 
 #[test]
 fn huge_distance_does_not_overflow() {
-    // 1 мм/с и 1 мм/с²: время огромное, обрезается до u32::MAX, без паники.
-    let slow = MotionParams::new(1, 1).expect("не нулевые");
+    // 1 мм/с, 1 мм/с², 1 мм/с³: время огромное, обрезается до u32::MAX, без паники.
+    let slow = MotionParams::new(1, 1, 1).expect("не нулевые");
     assert_eq!(slow.time_to_stop_ms(u32::MAX, 0), Some(u32::MAX));
 }
 
@@ -125,60 +103,81 @@ impl Rng {
     }
 }
 
-// Независимый эталон на f64: время в миллисекундах без округления.
-fn exact_ms(max_speed: u32, accel: u32, distance: u32, speed: u32) -> f64 {
-    let (vmax, a, d, v0) = (
-        f64::from(max_speed),
-        f64::from(accel),
-        f64::from(distance),
-        f64::from(speed),
-    );
-    let trapezoid_distance = (2.0 * vmax * vmax - v0 * v0) / (2.0 * a);
-    let seconds = if d >= trapezoid_distance {
-        (2.0 * vmax - v0) / a + (d - trapezoid_distance) / vmax
+// Разгон от v1 до v2 на f64: время в секундах и путь в мм.
+fn ramp(v1: f64, v2: f64, accel: f64, jerk: f64) -> (f64, f64) {
+    let delta = v2 - v1;
+    let seconds = if delta * jerk >= accel * accel {
+        delta / accel + accel / jerk
     } else {
-        let peak = (a * d + v0 * v0 / 2.0).sqrt();
-        (2.0 * peak - v0) / a
+        2.0 * (delta / jerk).sqrt()
     };
-    seconds * 1000.0
+    (seconds, f64::midpoint(v1, v2) * seconds)
+}
+
+// Независимый эталон на f64: идеальное время в миллисекундах без округлений, скорость хода
+// подбирается делением пополам.
+fn ideal_ms(max_speed: u32, accel: u32, jerk: u32, distance: u32, speed: u32) -> f64 {
+    let (vmax, a, j) = (f64::from(max_speed), f64::from(accel), f64::from(jerk));
+    let (d, v0) = (f64::from(distance), f64::from(speed));
+    let covered = |vc: f64| ramp(v0, vc, a, j).1 + ramp(0.0, vc, a, j).1;
+    let cruise_speed = if covered(vmax) <= d {
+        vmax
+    } else {
+        let (mut low, mut high) = (v0, vmax);
+        for _ in 0..200 {
+            let mid = f64::midpoint(low, high);
+            if covered(mid) <= d {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        low
+    };
+    let ramps = ramp(v0, cruise_speed, a, j).0 + ramp(0.0, cruise_speed, a, j).0;
+    let cruise = if cruise_speed > 0.0 {
+        (d - covered(cruise_speed)).max(0.0) / cruise_speed
+    } else {
+        0.0
+    };
+    (ramps + cruise) * 1000.0
 }
 
 #[test]
-fn random_cases_are_the_smallest_whole_milliseconds_not_below_the_exact_time() {
+fn random_cases_stay_within_a_few_milliseconds_above_the_ideal_time() {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     for _ in 0..20_000 {
         let max_speed = rng.range(200, 6000);
-        let accel = rng.range(100, 4000);
-        let distance = rng.range(0, 60_000);
+        let accel = rng.range(100, 3000);
+        let jerk = rng.range(100, 5000);
+        let distance = rng.range(1, 60_000);
         let speed = rng.range(0, max_speed);
-        let p = MotionParams::new(max_speed, accel).expect("не нулевые");
+        let p = MotionParams::new(max_speed, accel, jerk).expect("не нулевые");
 
         let reachable = distance >= p.braking_distance_mm(speed);
         let got = p.time_to_stop_ms(distance, speed);
-        assert_eq!(
-            got.is_some(),
-            reachable,
-            "vmax={max_speed} a={accel} d={distance} v0={speed}"
-        );
+        let case = format!("vmax={max_speed} a={accel} j={jerk} d={distance} v0={speed}");
+        assert_eq!(got.is_some(), reachable, "{case}");
         if let Some(ms) = got {
-            let exact = exact_ms(max_speed, accel, distance, speed);
+            let ideal = ideal_ms(max_speed, accel, jerk, distance, speed);
             let ms = f64::from(ms);
             assert!(
-                ms >= exact - 1e-6 && ms < exact + 1.0 + 1e-6,
-                "vmax={max_speed} a={accel} d={distance} v0={speed}: получили {ms}, точно {exact}"
+                ms >= ideal - 1e-3 && ms <= ideal + 4.5,
+                "{case}: получили {ms}, идеально {ideal}"
             );
         }
     }
 }
 
 #[test]
-fn longer_distance_never_takes_less_time() {
+fn longer_distance_takes_no_less_time_up_to_one_millisecond() {
     let mut rng = Rng(42);
     for _ in 0..2000 {
         let max_speed = rng.range(200, 6000);
-        let accel = rng.range(100, 4000);
+        let accel = rng.range(100, 3000);
+        let jerk = rng.range(100, 5000);
         let speed = rng.range(0, max_speed);
-        let p = MotionParams::new(max_speed, accel).expect("не нулевые");
+        let p = MotionParams::new(max_speed, accel, jerk).expect("не нулевые");
         let start = p.braking_distance_mm(speed);
         let mut last = p
             .time_to_stop_ms(start, speed)
@@ -187,7 +186,10 @@ fn longer_distance_never_takes_less_time() {
             let now = p
                 .time_to_stop_ms(start + step * 997, speed)
                 .expect("дальше тормозного пути цель достижима");
-            assert!(now >= last, "время уменьшилось при росте пути");
+            assert!(
+                now + 1 >= last,
+                "время уменьшилось при росте пути: {last} -> {now}"
+            );
             last = now;
         }
     }

@@ -1,11 +1,13 @@
 //! Тесты расчёта ETA.
 //!
-//! Здание: 10 этажей по 3000 мм, этаж `n` лежит на `(n - 1) * 3000` мм. Движение: 3000 мм/с
-//! и 1500 мм/с². Цикл дверей на остановке 6000 мс (в тестах число условное, не из ТЗ).
-//! Время проезда между остановками считаем по модулю `motion`: 6000 мм это 4000 мс,
-//! 9000 мм это 5000 мс, 3000 мм это 2829 мс, 15 000 мм это 7000 мс, 21 000 мм это 9000 мс.
+//! Здание: 10 этажей по 3000 мм, этаж `n` лежит на `(n - 1) * 3000` мм. Движение: 1600 мм/с,
+//! 1000 мм/с², рывок 1000 мм/с³. Двери: открытие 2000, выдержка 5000, закрытие 3000 мс,
+//! цикл 10 000 мс. Время проезда в ожиданиях считается через `drive`, поэтому тесты
+//! проверяют маршрут, а не саму кинематику.
 
-use elevator_ctrl::eta::{Building, Call, CarState, Direction, EtaParams, build_matrix, eta_ms};
+use elevator_ctrl::eta::{
+    Building, Call, CarState, Direction, DoorTimes, EtaParams, QueuedCall, build_matrix, eta_ms,
+};
 use elevator_ctrl::motion::MotionParams;
 use elevator_ctrl::{Cell, assign};
 
@@ -13,14 +15,37 @@ use Direction::{Down, Up};
 
 const FLOORS: u32 = 10;
 const HEIGHT: u32 = 3000;
-const DOOR_CYCLE: u32 = 6000;
+const CYCLE: u32 = 10_000;
+
+fn motion() -> MotionParams {
+    MotionParams::new(1600, 1000, 1000).expect("движение")
+}
 
 fn params() -> EtaParams {
     EtaParams {
         building: Building::new(10, HEIGHT).expect("здание"),
-        motion: MotionParams::new(3000, 1500).expect("движение"),
-        door_cycle_ms: DOOR_CYCLE,
+        motion: motion(),
+        doors: DoorTimes {
+            open_ms: 2000,
+            dwell_ms: 5000,
+            close_ms: 3000,
+        },
+        aging_cap_ms: 0,
     }
+}
+
+// Время проезда между остановками с места.
+fn drive(mm: u32) -> u32 {
+    motion()
+        .time_to_stop_ms(mm, 0)
+        .expect("с места доехать можно")
+}
+
+// Время до остановки для кабины, которая уже идёт со скоростью `speed`.
+fn drive_from(mm: u32, speed: u32) -> u32 {
+    motion()
+        .time_to_stop_ms(mm, speed)
+        .expect("остановиться успевает")
 }
 
 const fn pos(floor: u32) -> u32 {
@@ -40,6 +65,7 @@ fn idle(floor: u32, heading: Direction) -> CarState {
         door_remaining_ms: 0,
         up_calls: 0,
         down_calls: 0,
+        car_calls: 0,
         available: true,
     }
 }
@@ -49,6 +75,22 @@ fn with_calls(car: CarState, ups: &[u32], downs: &[u32]) -> CarState {
         up_calls: mask(ups),
         down_calls: mask(downs),
         ..car
+    }
+}
+
+fn with_car_calls(car: CarState, floors: &[u32]) -> CarState {
+    CarState {
+        car_calls: mask(floors),
+        ..car
+    }
+}
+
+// Кабина, идущая вверх на полной скорости на уровне 2-го этажа.
+fn flying() -> CarState {
+    CarState {
+        position_mm: pos(2),
+        speed_mm_s: 1600,
+        ..idle(1, Up)
     }
 }
 
@@ -63,12 +105,18 @@ fn eta(car: &CarState, floor: u32, direction: Direction) -> Option<u32> {
     eta_ms(&params(), car, call(floor, direction))
 }
 
+fn queued(floor: u32, direction: Direction, waited_ms: u32) -> QueuedCall {
+    QueuedCall {
+        call: call(floor, direction),
+        waited_ms,
+    }
+}
+
 #[test]
 fn idle_car_drives_straight_to_the_call() {
-    // 1-й этаж на 3-й: 6000 мм.
-    assert_eq!(eta(&idle(1, Up), 3, Up), Some(4000));
+    assert_eq!(eta(&idle(1, Up), 3, Up), Some(drive(6000)));
     // Направление кнопки не важно, если у кабины нет других дел.
-    assert_eq!(eta(&idle(1, Up), 3, Down), Some(4000));
+    assert_eq!(eta(&idle(1, Up), 3, Down), Some(drive(6000)));
 }
 
 #[test]
@@ -77,7 +125,7 @@ fn doors_still_closing_delay_the_start() {
         door_remaining_ms: 1500,
         ..idle(1, Up)
     };
-    assert_eq!(eta(&car, 3, Up), Some(5500));
+    assert_eq!(eta(&car, 3, Up), Some(1500 + drive(6000)));
 }
 
 #[test]
@@ -92,9 +140,8 @@ fn call_on_the_floor_where_the_idle_car_stands_is_immediate() {
 
 #[test]
 fn idle_car_goes_down_to_a_call_below() {
-    // 5-й этаж на 1-й: 12 000 мм, 2 с разгона, 4 с хода, но тормоз и разгон внутри: 6000 мс.
-    assert_eq!(eta(&idle(5, Up), 1, Down), Some(6000));
-    assert_eq!(eta(&idle(10, Down), 7, Down), Some(5000));
+    assert_eq!(eta(&idle(5, Up), 1, Down), Some(drive(12_000)));
+    assert_eq!(eta(&idle(10, Down), 7, Down), Some(drive(9000)));
 }
 
 #[test]
@@ -117,60 +164,60 @@ fn impossible_inputs_get_no_estimate() {
     };
     assert_eq!(eta(&outside, 5, Up), None);
     let too_fast = CarState {
-        speed_mm_s: 3001,
+        speed_mm_s: 1601,
         ..idle(1, Up)
     };
     assert_eq!(eta(&too_fast, 5, Up), None);
-    let ghost_floor = CarState {
-        up_calls: 1 << 10,
-        ..car
-    };
-    assert_eq!(eta(&ghost_floor, 5, Up), None);
+    for ghost in [
+        CarState {
+            up_calls: 1 << 10,
+            ..car
+        },
+        CarState {
+            down_calls: 1 << 31,
+            ..car
+        },
+        CarState {
+            car_calls: 1 << 10,
+            ..car
+        },
+    ] {
+        assert_eq!(eta(&ghost, 5, Up), None);
+    }
 }
 
 #[test]
 fn moving_car_reaches_a_call_ahead() {
-    // Едет вверх на полной скорости с 2-го этажа (3000 мм), цель 6-й (15 000 мм): ход 9000 мм
-    // за 3 с и торможение 2 с.
-    let car = CarState {
-        position_mm: 3000,
-        speed_mm_s: 3000,
-        ..idle(1, Up)
-    };
-    assert_eq!(eta(&car, 6, Up), Some(5000));
-    // Ровно тормозной путь до 3-го этажа: 2 с торможения.
-    assert_eq!(eta(&car, 3, Up), Some(2000));
+    // Едет вверх на полной скорости с уровня 2-го этажа. Цель 6-й этаж: 12 000 мм.
+    assert_eq!(eta(&flying(), 6, Up), Some(drive_from(12_000, 1600)));
+    // 3-й этаж в 3000 мм: тормозной путь с этой скорости 2080 мм, успевает.
+    assert_eq!(eta(&flying(), 3, Up), Some(drive_from(3000, 1600)));
 }
 
 #[test]
 fn moving_car_ignores_the_door_timer() {
     let car = CarState {
-        position_mm: 3000,
-        speed_mm_s: 3000,
         door_remaining_ms: 9999,
-        ..idle(1, Up)
+        ..flying()
     };
-    assert_eq!(eta(&car, 6, Up), Some(5000));
+    assert_eq!(eta(&car, 6, Up), eta(&flying(), 6, Up));
 }
 
 #[test]
 fn moving_car_cannot_stop_at_a_floor_it_is_already_passing() {
-    // Кабина на уровне 2-го этажа на полной скорости, вызов вверх на 2-м этаже. Ближайший
-    // этаж, где можно встать, 3-й: 2000 мс. Там разворот и возврат вниз: 3000 мм, 2829 мс.
-    let car = CarState {
-        position_mm: 3000,
-        speed_mm_s: 3000,
-        ..idle(1, Up)
-    };
-    assert_eq!(eta(&car, 2, Up), Some(4829));
+    // Кабина на уровне 2-го этажа, вызов вверх на 2-м. Ближайший этаж, где можно встать,
+    // 3-й (дальше тормозного пути 2080 мм). Там разворот без дверей и возврат вниз.
+    assert_eq!(
+        eta(&flying(), 2, Up),
+        Some(drive_from(3000, 1600) + drive(3000))
+    );
 }
 
 #[test]
 fn moving_car_past_the_last_reachable_floor_gets_no_estimate() {
     let car = CarState {
         position_mm: pos(9) + 2000,
-        speed_mm_s: 3000,
-        ..idle(1, Up)
+        ..flying()
     };
     assert_eq!(eta(&car, 5, Down), None);
 }
@@ -178,44 +225,83 @@ fn moving_car_past_the_last_reachable_floor_gets_no_estimate() {
 #[test]
 fn on_the_way_call_is_not_delayed_by_a_later_stop() {
     let car = with_calls(idle(1, Up), &[4], &[]);
-    assert_eq!(eta(&car, 3, Up), Some(4000));
+    assert_eq!(eta(&car, 3, Up), Some(drive(6000)));
 }
 
 #[test]
 fn on_the_way_call_beyond_a_planned_stop_waits_for_its_doors() {
-    // 1-й на 4-й (9000 мм) 5000 мс, двери 6000, 4-й на 7-й (9000 мм) 5000 мс.
     let car = with_calls(idle(1, Up), &[4], &[]);
-    assert_eq!(eta(&car, 7, Up), Some(16_000));
+    assert_eq!(eta(&car, 7, Up), Some(drive(9000) + CYCLE + drive(9000)));
 }
 
 #[test]
 fn opposite_call_is_taken_at_the_turnaround_point() {
     // Есть вызов вверх на 4-й, новый вызов вниз на 6-й: кабина поднимается до 6-го,
-    // это точка разворота. 5000 + 6000 + 4000 (6000 мм).
+    // это точка разворота.
     let car = with_calls(idle(1, Up), &[4], &[]);
-    assert_eq!(eta(&car, 6, Down), Some(15_000));
+    assert_eq!(eta(&car, 6, Down), Some(drive(9000) + CYCLE + drive(6000)));
 }
 
 #[test]
 fn opposite_call_below_the_turnaround_is_taken_on_the_way_back() {
-    // Подъём на 8-й (21 000 мм) 9000 мс, двери 6000, спуск на 5-й (9000 мм) 5000 мс.
+    // Подъём на 8-й, потом спуск на 5-й.
     let car = with_calls(idle(1, Up), &[8], &[]);
-    assert_eq!(eta(&car, 5, Down), Some(20_000));
+    assert_eq!(
+        eta(&car, 5, Down),
+        Some(drive(21_000) + CYCLE + drive(9000))
+    );
 }
 
 #[test]
 fn call_in_the_same_direction_behind_waits_for_the_next_sweep() {
-    // Едет вверх с 5-го этажа к 8-му, вызов вверх на 3-м остался позади: сначала 5-й на 8-й
-    // (9000 мм) 5000 мс, двери 6000, потом вниз с 8-го на 3-й (15 000 мм) 7000 мс.
+    // Едет вверх с 5-го этажа к 8-му, вызов вверх на 3-м остался позади: сначала 5-й на 8-й,
+    // потом вниз с 8-го на 3-й.
     let car = with_calls(idle(5, Up), &[8], &[]);
-    assert_eq!(eta(&car, 3, Up), Some(18_000));
+    assert_eq!(eta(&car, 3, Up), Some(drive(9000) + CYCLE + drive(15_000)));
 }
 
 #[test]
 fn heading_down_mirrors_heading_up() {
-    // Зеркало случая «подъём на 8-й, вызов вниз на 5-й»: 10-й этаж, спуск на 3-й, вызов вверх на 6-й.
+    // Зеркало случая «подъём на 8-й, вызов вниз на 5-й»: 10-й этаж, спуск на 3-й, вызов
+    // вверх на 6-й.
     let car = with_calls(idle(10, Down), &[], &[3]);
-    assert_eq!(eta(&car, 6, Up), Some(20_000));
+    assert_eq!(eta(&car, 6, Up), Some(drive(21_000) + CYCLE + drive(9000)));
+}
+
+#[test]
+fn passenger_destination_is_an_extra_stop_on_the_way() {
+    // Пассажир в кабине нажал 5-й этаж. Вызов вверх на 7-м ждёт остановки на 5-м.
+    let car = with_car_calls(idle(1, Up), &[5]);
+    assert_eq!(eta(&car, 7, Up), Some(drive(12_000) + CYCLE + drive(6000)));
+}
+
+#[test]
+fn passenger_destination_below_does_not_delay_a_call_above() {
+    let car = with_car_calls(idle(5, Up), &[2]);
+    assert_eq!(eta(&car, 8, Up), Some(drive(9000)));
+}
+
+#[test]
+fn passenger_destination_below_is_served_on_the_way_down() {
+    // Кабина на 5-м, пассажир едет на 2-й, вызов вниз на 3-м по дороге: ждёт только проезда.
+    let car = with_car_calls(idle(5, Up), &[2]);
+    assert_eq!(eta(&car, 3, Down), Some(drive(6000)));
+}
+
+#[test]
+fn hall_call_and_passenger_destination_on_one_floor_share_the_stop() {
+    let car = with_car_calls(idle(1, Up), &[3]);
+    assert_eq!(eta(&car, 3, Up), Some(drive(6000)));
+}
+
+#[test]
+fn passenger_destination_above_stretches_the_sweep() {
+    // Пассажир едет на 9-й, вызов вниз на 5-м: сначала до 9-го, потом вниз к 5-му.
+    let car = with_car_calls(idle(1, Up), &[9]);
+    assert_eq!(
+        eta(&car, 5, Down),
+        Some(drive(24_000) + CYCLE + drive(12_000))
+    );
 }
 
 #[test]
@@ -230,19 +316,56 @@ fn matrix_shows_why_the_global_choice_beats_the_nearest_first_one() {
             ..idle(1, Up)
         },
     ];
-    let calls = [call(3, Down), call(8, Up)];
+    let calls = [queued(3, Down, 0), queued(8, Up, 0)];
     let matrix = build_matrix(&params(), &cars, &calls);
     assert_eq!(
         matrix,
         [
-            [Cell::allowed(5000), Cell::allowed(4000)],
-            [Cell::allowed(9000), Cell::allowed(4000)],
+            [Cell::allowed(drive(9000)), Cell::allowed(drive(6000))],
+            [Cell::allowed(drive(21_000)), Cell::allowed(drive(6000))],
             [Cell::forbidden(0), Cell::forbidden(0)],
         ]
     );
-    // Жадный выбор: A берёт Y (4000), B остаётся с X (9000), всего 13 000.
-    // Глобально лучше A на X и B на Y: 5000 + 4000 = 9000.
+    // Жадный выбор: A берёт Y (кабины по id при равенстве), B остаётся с X, это дороже.
+    // Глобально лучше A на X и B на Y.
     assert_eq!(assign(&matrix), [Some(0), Some(1), None]);
+}
+
+#[test]
+fn long_waiting_call_wins_when_there_are_more_calls_than_cars() {
+    // Одна кабина на 1-м этаже, два вызова: далёкий X давно ждёт, близкий Y свежий.
+    let cars = [idle(1, Up)];
+    let calls = [queued(8, Up, 60_000), queued(3, Up, 0)];
+
+    let mut plain = params();
+    plain.aging_cap_ms = 0;
+    let plain_matrix = build_matrix(&plain, &cars, &calls);
+    assert_eq!(
+        plain_matrix,
+        [[Cell::allowed(drive(21_000)), Cell::allowed(drive(6000))]]
+    );
+    assert_eq!(assign(&plain_matrix), [Some(1)]);
+
+    let mut aging = params();
+    aging.aging_cap_ms = 120_000;
+    let aging_matrix = build_matrix(&aging, &cars, &calls);
+    assert_eq!(
+        aging_matrix,
+        [[
+            Cell::allowed(drive(21_000) + 60_000),
+            Cell::allowed(drive(6000) + 120_000)
+        ]]
+    );
+    assert_eq!(assign(&aging_matrix), [Some(0)]);
+}
+
+#[test]
+fn waiting_longer_than_the_cap_counts_as_the_cap() {
+    let cars = [idle(1, Up)];
+    let mut aging = params();
+    aging.aging_cap_ms = 10_000;
+    let matrix = build_matrix(&aging, &cars, &[queued(3, Up, 999_999)]);
+    assert_eq!(matrix, [[Cell::allowed(drive(6000))]]);
 }
 
 struct Rng(u64);
@@ -273,7 +396,7 @@ impl Rng {
         let moving = self.below(3) == 0;
         let heading = self.direction();
         let (position_mm, speed_mm_s) = if moving {
-            (self.below(pos(FLOORS) + 1), self.below(3000) + 1)
+            (self.below(pos(FLOORS) + 1), self.below(1600) + 1)
         } else {
             (pos(self.below(FLOORS) + 1), 0)
         };
@@ -281,9 +404,10 @@ impl Rng {
             position_mm,
             speed_mm_s,
             heading,
-            door_remaining_ms: self.below(7000),
+            door_remaining_ms: self.below(10_000),
             up_calls: self.sparse_mask(),
             down_calls: self.sparse_mask(),
+            car_calls: self.sparse_mask() & self.sparse_mask(),
             available: true,
         }
     }
@@ -308,6 +432,7 @@ fn mirror(car: &CarState, target: Call) -> (CarState, Call) {
             heading: flip(car.heading),
             up_calls: mirror_mask(car.down_calls),
             down_calls: mirror_mask(car.up_calls),
+            car_calls: mirror_mask(car.car_calls),
             ..*car
         },
         Call {
@@ -317,39 +442,56 @@ fn mirror(car: &CarState, target: Call) -> (CarState, Call) {
     )
 }
 
-type Pending = Vec<(u32, Direction)>;
+// Вид вызова в эталоне: вызов этажа вверх или вниз, либо этаж, нажатый в кабине.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Up,
+    Down,
+    Car,
+}
 
-// Забирает из `remaining` вызовы на этаже `floor`, у которых направление подходит под `keep`.
-fn take(remaining: &mut Pending, floor: u32, keep: impl Fn(Direction) -> bool) -> Pending {
+type Pending = Vec<(u32, Kind)>;
+
+// Забирает из `remaining` вызовы на этаже `floor`, вид которых подходит под `keep`.
+fn take(remaining: &mut Pending, floor: u32, keep: impl Fn(Kind) -> bool) -> Pending {
     let served: Pending = remaining
         .iter()
         .copied()
-        .filter(|(f, d)| *f == floor && keep(*d))
+        .filter(|(f, k)| *f == floor && keep(*k))
         .collect();
     remaining.retain(|c| !served.contains(c));
     served
 }
 
-fn floors_of(calls: &Pending, keep: impl Fn(Direction) -> bool) -> Vec<u32> {
+fn floors_of(calls: &Pending, keep: impl Fn(Kind) -> bool) -> Vec<u32> {
     calls
         .iter()
-        .filter(|(_, d)| keep(*d))
+        .filter(|(_, k)| keep(*k))
         .map(|(floor, _)| *floor)
         .collect()
 }
 
 // Независимый эталон для кабины, едущей вверх: те же правила, но списками и сортировкой.
-// Три прохода: вверх через попутные вызовы до самой верхней точки, вниз через вызовы вниз
-// до самой нижней, снова вверх через оставшиеся вызовы вверх.
+// Три прохода: вверх через попутные вызовы и вызовы из кабины до самой верхней точки,
+// вниз через вызовы вниз и из кабины до самой нижней, снова вверх через оставшиеся вызовы вверх.
 fn oracle_up(p: &EtaParams, car: &CarState, target: Call) -> Option<u32> {
-    let target = (u32::from(target.floor), target.direction);
+    let target = (
+        u32::from(target.floor),
+        match target.direction {
+            Up => Kind::Up,
+            Down => Kind::Down,
+        },
+    );
     let mut pending: Pending = Vec::new();
     for floor in 1..=FLOORS {
-        if (car.up_calls >> (floor - 1)) & 1 == 1 {
-            pending.push((floor, Up));
-        }
-        if (car.down_calls >> (floor - 1)) & 1 == 1 {
-            pending.push((floor, Down));
+        for (mask, kind) in [
+            (car.up_calls, Kind::Up),
+            (car.down_calls, Kind::Down),
+            (car.car_calls, Kind::Car),
+        ] {
+            if (mask >> (floor - 1)) & 1 == 1 {
+                pending.push((floor, kind));
+            }
         }
     }
     if !pending.contains(&target) {
@@ -369,12 +511,12 @@ fn oracle_up(p: &EtaParams, car: &CarState, target: Call) -> Option<u32> {
     let mut remaining = pending.clone();
 
     if let Some(top) = ahead.iter().map(|(floor, _)| *floor).max() {
-        let mut floors = floors_of(&ahead, |d| d == Up);
+        let mut floors = floors_of(&ahead, |k| k != Kind::Down);
         floors.push(top);
         floors.sort_unstable();
         floors.dedup();
         for floor in floors {
-            let served = take(&mut remaining, floor, |d| d == Up || floor == top);
+            let served = take(&mut remaining, floor, |k| k != Kind::Down || floor == top);
             stops.push((floor, false, served));
         }
     } else if moving {
@@ -386,12 +528,12 @@ fn oracle_up(p: &EtaParams, car: &CarState, target: Call) -> Option<u32> {
     }
 
     if let Some(lowest) = remaining.iter().map(|(floor, _)| *floor).min() {
-        let mut floors = floors_of(&remaining, |d| d == Down);
+        let mut floors = floors_of(&remaining, |k| k != Kind::Up);
         floors.push(lowest);
         floors.sort_unstable_by_key(|floor| std::cmp::Reverse(*floor));
         floors.dedup();
         for floor in floors {
-            let served = take(&mut remaining, floor, |d| d == Down || floor == lowest);
+            let served = take(&mut remaining, floor, |k| k != Kind::Up || floor == lowest);
             stops.push((floor, false, served));
         }
         let mut floors = floors_of(&remaining, |_| true);
@@ -419,7 +561,7 @@ fn oracle_up(p: &EtaParams, car: &CarState, target: Call) -> Option<u32> {
             return Some(u32::try_from(clock).unwrap_or(u32::MAX));
         }
         if !*is_virtual {
-            clock += u64::from(DOOR_CYCLE);
+            clock += p.doors.cycle_ms();
         }
     }
     None
@@ -464,18 +606,15 @@ fn a_standing_car_is_never_faster_than_driving_straight() {
             floor: u8::try_from(rng.below(FLOORS) + 1).expect("этаж"),
             direction: rng.direction(),
         };
-        let straight = car.door_remaining_ms
-            + p.motion
-                .time_to_stop_ms(pos(u32::from(target.floor)).abs_diff(car.position_mm), 0)
-                .expect("с места доехать можно");
+        let straight =
+            car.door_remaining_ms + drive(pos(u32::from(target.floor)).abs_diff(car.position_mm));
         let got = eta_ms(&p, &car, target).expect("стоящая кабина всегда оценивается");
         assert!(got >= straight, "кабина {car:?}, вызов {target:?}");
     }
 }
 
 #[test]
-fn estimate_does_not_depend_on_calls_already_assigned_being_repeated() {
-    // Повторное назначение того же вызова ничего не меняет.
+fn repeating_an_assigned_call_changes_nothing() {
     let car = with_calls(idle(1, Up), &[4], &[6]);
     let base = eta(&car, 6, Down);
     assert!(base.is_some());
@@ -502,12 +641,12 @@ fn thirty_two_floors_use_every_bit_of_the_masks() {
         position_mm: 0,
         ..idle(1, Up)
     };
-    // 31 этаж по 3000 мм = 93 000 мм: 2 с разгона, 31 с хода, торможение внутри: 33 000 мс.
     let up = Call {
         floor: 32,
         direction: Up,
     };
-    assert_eq!(eta_ms(&tall, &bottom, up), Some(33_000));
+    // 31 этаж по 3000 мм.
+    assert_eq!(eta_ms(&tall, &bottom, up), Some(drive(93_000)));
     let top = CarState {
         position_mm: 31 * HEIGHT,
         heading: Down,
@@ -517,11 +656,28 @@ fn thirty_two_floors_use_every_bit_of_the_masks() {
         floor: 1,
         direction: Down,
     };
-    assert_eq!(eta_ms(&tall, &top, down), Some(33_000));
-    // Назначенный вызов на 32-м этаже и новый внизу: тот же маршрут, что и с зеркалом.
+    assert_eq!(eta_ms(&tall, &top, down), Some(drive(93_000)));
+    // Назначенный вызов на 32-м этаже и тот же новый: маршрут не меняется.
     let busy = CarState {
         up_calls: 1 << 31,
         ..bottom
     };
-    assert_eq!(eta_ms(&tall, &busy, up), Some(33_000));
+    assert_eq!(eta_ms(&tall, &busy, up), Some(drive(93_000)));
+}
+
+#[test]
+fn door_phases_only_matter_through_their_sum() {
+    let split = EtaParams {
+        doors: DoorTimes {
+            open_ms: 1,
+            dwell_ms: 1,
+            close_ms: 9998,
+        },
+        ..params()
+    };
+    let car = with_calls(idle(1, Up), &[4], &[]);
+    assert_eq!(
+        eta_ms(&split, &car, call(7, Up)),
+        eta_ms(&params(), &car, call(7, Up))
+    );
 }
