@@ -733,7 +733,14 @@ main {
   border: 0;
   border-radius: 100%;
 }
+.switch-recording {
+  display: inline-block;
+  margin-top: 18px;
+  font-weight: 600;
+  text-decoration: underline;
+}
 .chapters {
+  flex-wrap: wrap;
   display: flex;
   justify-content: space-between;
   gap: 4px;

@@ -199,6 +199,6 @@ export function parseTimeline(data: unknown): Timeline {
         )
     }
   }
-  check(previous === durationMs && events.at(-1).type === 'RESET', 'конец')
+  check(previous === durationMs && ['RESET', 'END'].includes(events.at(-1).type), 'конец')
   return data as Timeline
 }
