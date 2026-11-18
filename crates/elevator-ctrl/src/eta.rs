@@ -3,7 +3,8 @@
 //!
 //! Кабины работают по собирательному принципу: по пути берут попутные вызовы, а встречные
 //! только в точке разворота. Оценщик строит маршрут кабины (подъём, спуск, снова подъём)
-//! и считает время до остановки, на которой обслуживается нужный вызов.
+//! и считает время до остановки, на которой обслуживается нужный вызов. В маршрут входят
+//! вызовы этажей, назначенные кабине, и вызовы из самой кабины (пассажир нажал этаж).
 
 use crate::Cell;
 use crate::motion::MotionParams;
@@ -24,11 +25,43 @@ impl Direction {
     }
 }
 
+/// Режим работы кабины. Назначения получает только кабина в обычном режиме.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CarMode {
+    /// Обычная работа в группе.
+    Normal,
+    /// «Пожарная опасность» (ГОСТ Р 53296-2009, п. 3.3): кабина принудительно уходит на
+    /// основной посадочный этаж, команды из кабины и зарегистрированные вызовы отменяются.
+    FireRecall,
+    /// «Перевозка пожарных подразделений» (там же, п. 3.4): включается после «пожарной
+    /// опасности», кабина выполняет только команды, поданные изнутри.
+    Firefighters,
+    /// Кабина выведена из работы: перегрузка, не подтверждено запирание дверей, сработала
+    /// цепь безопасности, дверь шахты открыта вне зоны дверей, критический вход потерял
+    /// достоверность, либо стоит блокировка после аварийной остановки до `recover_car`.
+    Unavailable,
+}
+
+impl CarMode {
+    /// Можно ли назначать этой кабине вызовы.
+    #[must_use]
+    pub const fn accepts_assignments(self) -> bool {
+        matches!(self, Self::Normal)
+    }
+}
+
 /// Вызов этажа: этаж с единицы и направление кнопки.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Call {
     pub floor: u8,
     pub direction: Direction,
+}
+
+/// Вызов в очереди диспетчера: сколько он уже ждёт с момента регистрации.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueuedCall {
+    pub call: Call,
+    pub waited_ms: u32,
 }
 
 /// Здание: число этажей (от 1 до 32) и высота этажа.
@@ -78,13 +111,51 @@ impl Building {
     }
 }
 
+/// Времена цикла дверей на остановке, мс.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DoorTimes {
+    // Открытие, выдержка и закрытие, мс.
+    open: u32,
+    dwell: u32,
+    close: u32,
+}
+
+impl DoorTimes {
+    /// Выдержка дверей в открытом состоянии должна регулироваться не уже, чем от 2 до 20 с
+    /// (EN 81-70), для маломобильных пассажиров советуют не меньше 6 с. Поэтому выдержка
+    /// вне этого диапазона и нулевые открытие или закрытие отклоняются.
+    pub const DWELL_RANGE_MS: core::ops::RangeInclusive<u32> = 2000..=20_000;
+
+    /// Времена цикла: открытие, выдержка, закрытие. `None`, если выдержка вне
+    /// [`Self::DWELL_RANGE_MS`] или открытие либо закрытие нулевые.
+    #[must_use]
+    pub fn new(open_ms: u32, dwell_ms: u32, close_ms: u32) -> Option<Self> {
+        if open_ms == 0 || close_ms == 0 || !Self::DWELL_RANGE_MS.contains(&dwell_ms) {
+            return None;
+        }
+        Some(Self {
+            open: open_ms,
+            dwell: dwell_ms,
+            close: close_ms,
+        })
+    }
+
+    /// Полный цикл: открытие, выдержка, закрытие.
+    #[must_use]
+    pub const fn cycle_ms(self) -> u64 {
+        self.open as u64 + self.dwell as u64 + self.close as u64
+    }
+}
+
 /// Всё, что нужно оценщику, кроме состояния кабин.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EtaParams {
     pub building: Building,
     pub motion: MotionParams,
-    /// Полный цикл дверей на остановке: открытие, выдержка, закрытие.
-    pub door_cycle_ms: u32,
+    pub doors: DoorTimes,
+    /// Предел учёта ожидания вызова при построении матрицы (см. [`build_matrix`]).
+    /// Ноль выключает приоритет по ожиданию.
+    pub aging_cap_ms: u32,
 }
 
 /// Состояние кабины для оценки.
@@ -94,6 +165,9 @@ pub struct CarState {
     pub position_mm: u32,
     /// Модуль скорости, мм/с. Ноль, если кабина стоит.
     pub speed_mm_s: u32,
+    /// Ускорение в сторону движения, мм/с², если кабина сейчас разгоняется. Для кабины,
+    /// которая идёт на постоянной скорости или тормозит, ноль (торможение считается с запасом).
+    pub accel_mm_s2: u32,
     /// Куда едет кабина, а если стоит, то куда пойдёт.
     pub heading: Direction,
     /// Сколько ещё нельзя трогаться из-за дверей. Для движущейся кабины не учитывается.
@@ -102,22 +176,28 @@ pub struct CarState {
     pub up_calls: u32,
     /// Уже назначенные вызовы «вниз»: бит `этаж - 1`.
     pub down_calls: u32,
-    /// Может ли кабина получать назначения (не перегружена, замки подтверждены и так далее).
-    pub available: bool,
+    /// Этажи, нажатые пассажирами внутри кабины: бит `этаж - 1`.
+    pub car_calls: u32,
+    /// Режим работы: назначения получает только `CarMode::Normal`.
+    pub mode: CarMode,
 }
 
-/// ETA кабины до вызова в миллисекундах. `None`, если кабина недоступна или состояние
-/// невозможно: этаж вне здания, положение за шахтой, скорость выше максимальной,
+/// ETA кабины до вызова в миллисекундах. `None`, если кабина не в обычном режиме или
+/// состояние невозможно: этаж вне здания, положение за шахтой, скорость или ускорение выше
+/// предела,
 /// назначения на несуществующие этажи, остановиться в шахте нельзя.
 #[must_use]
 pub fn eta_ms(params: &EtaParams, car: &CarState, call: Call) -> Option<u32> {
-    let building = &params.building;
+    let building = params.building;
     let floor = u32::from(call.floor);
-    let valid = car.available
+    let valid = car.mode.accepts_assignments()
         && (1..=u32::from(building.floors)).contains(&floor)
         && car.position_mm <= building.top_position_mm()
-        && car.speed_mm_s <= params.motion.max_speed_mm_s()
-        && (car.up_calls | car.down_calls) & !building.all_floors() == 0;
+        && params
+            .motion
+            .stopping_distance_mm(car.speed_mm_s, car.accel_mm_s2)
+            .is_some()
+        && (car.up_calls | car.down_calls | car.car_calls) & !building.all_floors() == 0;
     if !valid {
         return None;
     }
@@ -130,6 +210,7 @@ pub fn eta_ms(params: &EtaParams, car: &CarState, call: Call) -> Option<u32> {
                 heading: Direction::Up,
                 up_calls: building.mirror_mask(car.down_calls),
                 down_calls: building.mirror_mask(car.up_calls),
+                car_calls: building.mirror_mask(car.car_calls),
                 ..*car
             };
             let mirrored_call = Call {
@@ -151,25 +232,33 @@ struct Clock<'a> {
     millis: u64,
     position_mm: u32,
     speed_mm_s: u32,
+    accel_mm_s2: u32,
 }
 
 impl Clock<'_> {
+    // Идёт ли кабина (скорость или разгон ненулевые).
+    const fn moving(&self) -> bool {
+        self.speed_mm_s > 0 || self.accel_mm_s2 > 0
+    }
+
     // Едет к этажу и останавливается там. Возвращает момент остановки. Скорость после
     // остановки нулевая, поэтому начальная скорость влияет только на первый перегон.
     fn drive_to(&mut self, floor: u32) -> Option<u64> {
         let target = self.params.building.position_mm(floor);
-        let travel = self
-            .params
-            .motion
-            .time_to_stop_ms(target.abs_diff(self.position_mm), self.speed_mm_s)?;
+        let travel = self.params.motion.time_to_stop_from_ms(
+            target.abs_diff(self.position_mm),
+            self.speed_mm_s,
+            self.accel_mm_s2,
+        )?;
         self.millis += u64::from(travel);
         self.position_mm = target;
         self.speed_mm_s = 0;
+        self.accel_mm_s2 = 0;
         Some(self.millis)
     }
 
-    fn open_doors(&mut self) {
-        self.millis += u64::from(self.params.door_cycle_ms);
+    fn cycle_doors(&mut self) {
+        self.millis += self.params.doors.cycle_ms();
     }
 }
 
@@ -180,6 +269,7 @@ const fn floor_bit(floor: u32) -> u32 {
 // Маршрут кабины, которая едет вверх (спуск сводится к нему зеркалом). Три прохода:
 // вверх через попутные вызовы до самого верхнего, вниз через вызовы вниз до самого нижнего,
 // снова вверх через оставшиеся вызовы вверх. Встречный вызов берётся только в точке разворота.
+// Вызов из кабины обслуживается в первом проходе, который доходит до его этажа.
 struct Route<'a> {
     clock: Clock<'a>,
     call: Call,
@@ -189,6 +279,7 @@ struct Route<'a> {
     start_position_mm: u32,
     up: u32,
     down: u32,
+    car: u32,
     // Этаж, где кабина развернулась после прохода вверх, если разворот был.
     turn_floor: Option<u32>,
     // Самый нижний этаж прохода вниз.
@@ -199,16 +290,19 @@ struct Route<'a> {
 
 impl<'a> Route<'a> {
     fn new(params: &'a EtaParams, car: &CarState, call: Call) -> Self {
-        let building = &params.building;
+        let building = params.building;
         let target = floor_bit(u32::from(call.floor));
         let (mut up, mut down) = (car.up_calls, car.down_calls);
         match call.direction {
             Direction::Up => up |= target,
             Direction::Down => down |= target,
         }
-        let moving = car.speed_mm_s > 0;
-        let reach = u64::from(car.position_mm)
-            + u64::from(params.motion.braking_distance_mm(car.speed_mm_s));
+        let moving = car.speed_mm_s > 0 || car.accel_mm_s2 > 0;
+        let stopping = params
+            .motion
+            .stopping_distance_mm(car.speed_mm_s, car.accel_mm_s2)
+            .unwrap_or(u32::MAX);
+        let reach = u64::from(car.position_mm) + u64::from(stopping);
         let first_ahead = reach.div_ceil(u64::from(building.floor_height_mm)) + 1;
         Self {
             clock: Clock {
@@ -221,6 +315,7 @@ impl<'a> Route<'a> {
                 },
                 position_mm: car.position_mm,
                 speed_mm_s: car.speed_mm_s,
+                accel_mm_s2: car.accel_mm_s2,
             },
             call,
             floors: u32::from(building.floors),
@@ -228,6 +323,7 @@ impl<'a> Route<'a> {
             start_position_mm: car.position_mm,
             up,
             down,
+            car: car.car_calls,
             turn_floor: None,
             lowest: 0,
             found: None,
@@ -256,18 +352,18 @@ impl<'a> Route<'a> {
         if floor == u32::from(self.call.floor) && served {
             self.found = Some(saturate(arrival));
         } else {
-            self.clock.open_doors();
+            self.clock.cycle_doors();
         }
         Some(())
     }
 
     fn sweep_up(&mut self) -> Option<()> {
         let ahead = self.up_ahead_mask();
-        let pending = (self.up | self.down) & ahead;
+        let pending = (self.up | self.down | self.car) & ahead;
         if pending == 0 {
             // Впереди дел нет. Движущаяся кабина всё равно должна остановиться: тормозит
             // на ближайшем этаже, куда успевает, без открытия дверей.
-            if self.clock.speed_mm_s > 0 {
+            if self.clock.moving() {
                 if self.first_ahead > self.floors {
                     return None;
                 }
@@ -281,12 +377,13 @@ impl<'a> Route<'a> {
         for floor in self.first_ahead..=top {
             let bit = floor_bit(floor);
             let at_top = floor == top;
-            if self.up & bit != 0 || at_top {
+            if (self.up | self.car) & bit != 0 || at_top {
                 self.visit(floor, self.up & bit != 0, at_top && self.down & bit != 0)?;
                 if self.found.is_some() {
                     return Some(());
                 }
                 self.up &= !bit;
+                self.car &= !bit;
                 if at_top {
                     self.down &= !bit;
                 }
@@ -302,7 +399,7 @@ impl<'a> Route<'a> {
     }
 
     fn sweep_down(&mut self) -> Option<()> {
-        let building = &self.clock.params.building;
+        let building = self.clock.params.building;
         let turn_position = self
             .turn_floor
             .map_or(self.start_position_mm, |floor| building.position_mm(floor));
@@ -310,7 +407,7 @@ impl<'a> Route<'a> {
         let below = turn_position.div_ceil(building.floor_height_mm);
         let below_mask = u32::MAX.checked_shr(32 - below.min(32)).unwrap_or(0);
         let rest_down = self.down & below_mask;
-        let rest = rest_down | self.up;
+        let rest = rest_down | self.up | self.car;
         if rest == 0 {
             return None;
         }
@@ -318,12 +415,13 @@ impl<'a> Route<'a> {
         for floor in (self.lowest..=below).rev() {
             let bit = floor_bit(floor);
             let at_lowest = floor == self.lowest;
-            if rest_down & bit != 0 || at_lowest {
+            if (rest_down | self.car) & bit != 0 || at_lowest {
                 self.visit(floor, at_lowest && self.up & bit != 0, rest_down & bit != 0)?;
                 if self.found.is_some() {
                     return Some(());
                 }
                 self.down &= !bit;
+                self.car &= !bit;
                 if at_lowest {
                     self.up &= !bit;
                 }
@@ -349,16 +447,29 @@ impl<'a> Route<'a> {
 
 /// Матрица «кабина на вызов» для `assign`. Недоступная кабина или невозможная оценка
 /// дают запрещённую ячейку.
+///
+/// В ячейке стоит не чистый ETA, а ETA плюс поправка на ожидание вызова:
+/// `aging_cap_ms - min(ожидание, aging_cap_ms)`. Поправка одинакова для всех кабин одного
+/// вызова, поэтому не меняет, какая кабина лучше для этого вызова. Она меняет только то,
+/// какие вызовы обслужить в первую очередь, когда вызовов больше, чем кабин: долго ждущий
+/// вызов выигрывает у свежего. С `aging_cap_ms = 0` в ячейках чистый ETA.
 #[must_use]
 pub fn build_matrix<const CARS: usize, const CALLS: usize>(
     params: &EtaParams,
     cars: &[CarState; CARS],
-    calls: &[Call; CALLS],
+    calls: &[QueuedCall; CALLS],
 ) -> [[Cell; CALLS]; CARS] {
     core::array::from_fn(|car| {
-        core::array::from_fn(|call| match eta_ms(params, &cars[car], calls[call]) {
-            Some(eta) => Cell::allowed(eta),
-            None => Cell::forbidden(0),
+        core::array::from_fn(|index| {
+            let queued = calls[index];
+            match eta_ms(params, &cars[car], queued.call) {
+                Some(eta) => {
+                    let cap = params.aging_cap_ms;
+                    let aging = cap - queued.waited_ms.min(cap);
+                    Cell::allowed(eta.saturating_add(aging))
+                }
+                None => Cell::forbidden(0),
+            }
         })
     })
 }
