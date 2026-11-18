@@ -2,6 +2,7 @@
 import argparse
 import json
 import struct
+import sys
 from pathlib import Path
 
 VIZ = Path(__file__).resolve().parents[2]
@@ -43,19 +44,46 @@ def validate(timeline, path):
             assert f'Door_{car}_{side}' in nodes
             for floor in range(1, 11):
                 assert f'Landing_{car}_{floor:02}_{side}' in nodes
+    def floats(index):
+        acc = doc['accessors'][index]
+        view = doc['bufferViews'][acc['bufferView']]
+        offset = view.get('byteOffset', 0) + acc.get('byteOffset', 0)
+        components = {'SCALAR': 1, 'VEC3': 3}[acc['type']]
+        assert acc['componentType'] == 5126 and 'byteStride' not in view
+        return struct.unpack_from(f"<{acc['count'] * components}f", binary, offset)
+
+    def track(name, channel):
+        matches = [anim['samplers'][ch['sampler']] for anim in doc.get('animations', [])
+                   for ch in anim['channels'] if nodes[ch['target']['node']] == name
+                   and ch['target']['path'] == channel]
+        assert len(matches) == 1, f'{name}: отсутствует отдельная дорожка {channel}'
+        sampler = matches[0]
+        times = [round(t * 1000) for t in floats(sampler['input'])]
+        assert sampler['interpolation'] == 'LINEAR', f'{name}: нелинейная интерполяция ключей'
+        coords = floats(sampler['output'])
+        return dict(zip(times, zip(coords[::3], coords[1::3], coords[2::3]), strict=True))
+
+    sys.path.insert(0, str(VIZ / 'blender/sim'))
+    from model import position_at
     total = 0
     for car in 'ABC':
         expected = times_for_car(timeline, car)
-        channels = [(anim, ch) for anim in doc.get('animations', []) for ch in anim['channels']
-                    if nodes[ch['target']['node']] == f'Car_{car}' and ch['target']['path'] == 'translation']
-        assert len(channels) == 1, f'Кабина {car}: отсутствует отдельная дорожка движения'
-        anim, ch = channels[0]
-        acc = doc['accessors'][anim['samplers'][ch['sampler']]['input']]
-        view = doc['bufferViews'][acc['bufferView']]
-        offset = view.get('byteOffset', 0) + acc.get('byteOffset', 0)
-        actual = [round(t * 1000) for t in struct.unpack_from(f"<{acc['count']}f", binary, offset)]
-        assert actual == expected, f'{car}: ключи GLB {actual} и модели {expected} различаются'
-        total += len(actual)
+        positions = track(f'Car_{car}', 'translation')
+        assert list(positions) == expected, f'{car}: число или время ключей отличается от модели'
+        for t, (_, y, _) in positions.items():
+            assert round(y * 1000) == position_at(timeline, car, t), f'{car}: высота в {t} мс'
+        total += len(positions)
+    for event in timeline['events']:
+        t = event['tMs']
+        if event['type'] == 'ALARM':
+            assert track(f"Lamp_{event['car']}", 'scale')[t][0] == 1, 'Отсутствует индикация аварии'
+        if event['type'] == 'RESET':
+            for car in sorted({d['car'] for d in timeline['doors']}):
+                panels = [f'Door_{car}_L'] + [f'Landing_{car}_{floor:02}_L'
+                          for floor in sorted({d['floor'] for d in timeline['doors'] if d['car'] == car})]
+                for name in panels:
+                    positions = track(name, 'translation')
+                    assert abs(positions[t][0] - positions[0][0]) < .0001, f'{name}: сброс положения'
     print(f'GLB OK · 3 кабины · 10 этажей · {total} ключей положения · {len(nodes)} узлов')
 
 
