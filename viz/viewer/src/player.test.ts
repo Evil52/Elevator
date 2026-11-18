@@ -9,7 +9,7 @@ const line = parseTimeline(raw)
 describe('проигрыватель', () => {
   it('совпадает с эталонными целыми миллиметрами Python', () => {
     for (const { car, tMs, positionMm } of golden)
-      expect(positionAt(line, car as 'A'|'B'|'C', tMs)).toBe(positionMm)
+      expect(positionAt(line, car as 'A' | 'B' | 'C', tMs)).toBe(positionMm)
   })
   it('различает точный этаж и остановку между этажами', () => {
     expect(floorLabel(9000)).toBe('04')
@@ -25,7 +25,7 @@ describe('проигрыватель', () => {
     expect(Object.keys(end.calls)).toHaveLength(0)
   })
   it('различает одновременные события и сохраняет время регистрации', () => {
-    const at = line.events.findIndex(e => e.type === 'REQUEUE')
+    const at = line.events.findIndex((e) => e.type === 'REQUEUE')
     expect(stateAt(line, 3000, at).calls.H08.state).toBe('QUEUED')
     expect(stateAt(line, 3000).calls.H08.car).toBe('C')
     expect(stateAt(line, 3000).calls.H08.registeredMs).toBe(0)
@@ -46,9 +46,10 @@ describe('проигрыватель', () => {
   })
   it('отклоняет несовместимый формат, дробные величины и неверный порядок', () => {
     expect(() => parseTimeline({})).toThrow()
-    expect(() => parseTimeline({...raw, durationMs: 5.3})).toThrow()
-    expect(() => parseTimeline({...raw, events: [...raw.events].reverse()})).toThrow()
-    expect(() => parseTimeline({...raw, motions: [{ ...raw.motions[0], profile: null }]})).toThrow()
+    expect(() => parseTimeline({ ...raw, durationMs: 5.3 })).toThrow()
+    expect(() => parseTimeline({ ...raw, events: [...raw.events].reverse() })).toThrow()
+    expect(() =>
+      parseTimeline({ ...raw, motions: [{ ...raw.motions[0], profile: null }] }),
+    ).toThrow()
   })
 })
-

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#f5f6f3" />
+    <meta
+      name="description"
+      content="Интерактивный цифровой двойник лифтовой группы. Три кабины, десять этажей и событийный диспетчер."
+    />
+    <title>Liftlab — Симулятор лифтов</title>
+    <link rel="icon" type="image/svg+xml" href="/src/mark.svg" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topinner">
+        <a class="brand" href="#simulation" aria-label="Liftlab, к симулятору"
+          ><img src="/src/mark.svg" alt="" />Liftlab</a
+        >
+        <nav aria-label="Основная навигация">
+          <a href="#simulation" class="nav-item current" data-nav="simulation"
+            ><i data-icon="grid"></i>Симулятор</a
+          ><a href="#journal" class="nav-item" data-nav="journal"><i data-icon="list"></i>Журнал</a>
+        </nav>
+        <div class="session"><span class="status-dot"></span>Локальный сеанс</div>
+        <button class="help icon-btn" id="help" aria-label="О симуляторе и управлении">
+          <i data-icon="help"></i>
+        </button>
+      </div>
+    </header>
+
+    <main id="simulation">
+      <section class="pagehead">
+        <div>
+          <div class="eyebrow"><span class="short-line"></span>ЦИФРОВОЙ ДВОЙНИК</div>
+          <h1>Симулятор лифтов</h1>
+          <p>Два одновременных вызова, три кабины и аварийное переназначение.</p>
+        </div>
+        <button class="scenario" id="scenario-info" aria-label="Сценарий 01. Отказ замка двери">
+          <span class="scenario-icon"><i data-icon="route"></i></span
+          ><span><small>СЦЕНАРИЙ 01</small><strong>Отказ замка двери</strong></span
+          ><i data-icon="chevron-down"></i>
+        </button>
+      </section>
+      <div class="dashboard">
+        <div class="studio">
+          <section class="stage" aria-label="Трёхмерная модель здания">
+            <div class="studio-head">
+              <div class="stage-title">
+                <span class="cube-icon"><i data-icon="cube"></i></span>
+                <div>
+                  <h2>Модель здания</h2>
+                  <small>10 этажей <b>·</b> 3 шахты</small>
+                </div>
+              </div>
+              <div class="segmented" aria-label="Проекция">
+                <button id="iso" aria-pressed="true">Изометрия</button
+                ><button id="front" aria-pressed="false">Фасад</button>
+              </div>
+            </div>
+            <div class="scene-grid"></div>
+            <div id="scene" aria-label="Разрез трёх лифтовых шахт">
+              <div id="scene-loading">Загрузка модели…</div>
+            </div>
+            <div id="labels" aria-hidden="true"></div>
+            <div class="scene-foot">
+              <div class="axes" aria-hidden="true"><span>Z</span><b>Y</b><em>X</em></div>
+              <div class="zoom-tools">
+                <button id="zoom-out" aria-label="Отдалить модель"><i data-icon="minus"></i></button
+                ><button id="zoom-in" aria-label="Приблизить модель">
+                  <i data-icon="plus"></i></button
+                ><button id="fit" aria-label="Уместить модель"><i data-icon="fit"></i></button>
+              </div>
+            </div>
+            <div id="alert" role="status" hidden></div>
+          </section>
+          <section class="transport" aria-label="Управление воспроизведением">
+            <div class="transport-row">
+              <button class="play" id="play"><i data-icon="play"></i><span>Запустить</span></button
+              ><button id="prev" class="transport-icon" aria-label="Предыдущее событие">
+                <i data-icon="back"></i></button
+              ><button id="next" class="transport-icon" aria-label="Следующее событие">
+                <i data-icon="step"></i></button
+              ><span class="sep"></span>
+              <label class="speed"
+                ><span class="sr">Скорость воспроизведения</span
+                ><select id="speed">
+                  <option value="0.5">0,5×</option>
+                  <option value="1" selected>1×</option>
+                  <option value="2">2×</option>
+                  <option value="4">4×</option></select
+                ><i data-icon="chevron-down"></i
+              ></label>
+              <div class="timecode" title="Модельное время">
+                <i data-icon="clock"></i><strong id="time">00:00</strong><span>/</span
+                ><span id="total">00:52</span>
+              </div>
+            </div>
+            <div class="track">
+              <div class="track-line"></div>
+              <div id="event-marks"></div>
+              <input
+                type="range"
+                id="scrub"
+                min="0"
+                max="1"
+                value="0"
+                aria-label="Перейти к событию"
+              />
+            </div>
+            <div class="chapters" id="chapters"></div>
+          </section>
+        </div>
+        <aside class="rail">
+          <section class="panel telemetry">
+            <div class="panel-head">
+              <h2><i data-icon="activity"></i>Телеметрия</h2>
+              <span class="count-badge">3 кабины</span>
+            </div>
+            <div id="cars"></div>
+          </section>
+          <section class="panel matrix-panel">
+            <div class="panel-head">
+              <h2><i data-icon="matrix"></i>Матрица ETA</h2>
+              <button class="info icon-btn" id="matrix-info" aria-label="Как считается ETA">
+                <i data-icon="info"></i>
+              </button>
+            </div>
+            <div id="matrix"></div>
+          </section>
+        </aside>
+        <section class="panel calls-panel">
+          <div class="panel-head">
+            <h2><i data-icon="calls"></i>Очередь вызовов</h2>
+            <span class="count-badge" id="call-count">2 вызова</span>
+          </div>
+          <div id="calls"></div>
+        </section>
+        <section class="panel journal-panel" id="journal">
+          <div class="panel-head">
+            <h2><i data-icon="list"></i>Журнал событий</h2>
+            <span class="count-badge" id="journal-count"></span>
+          </div>
+          <div id="log" aria-label="События до курсора"></div>
+        </section>
+      </div>
+    </main>
+    <dialog id="dialog">
+      <div class="dialog-head">
+        <span class="dialog-icon" id="dialog-icon"></span
+        ><button class="icon-btn" id="close-dialog" aria-label="Закрыть окно">
+          <i data-icon="close"></i>
+        </button>
+      </div>
+      <div id="dialog-content"></div>
+    </dialog>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
