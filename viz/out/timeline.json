@@ -1,0 +1,544 @@
+{
+  "schemaVersion": 1,
+  "source": "python-demo",
+  "initial": {
+    "A": 9000,
+    "B": 0,
+    "C": 27000
+  },
+  "calls": [
+    {
+      "id": "H03",
+      "floor": 3,
+      "direction": "DOWN",
+      "registeredMs": 0
+    },
+    {
+      "id": "H08",
+      "floor": 8,
+      "direction": "UP",
+      "registeredMs": 0
+    }
+  ],
+  "events": [
+    {
+      "tMs": 0,
+      "type": "START"
+    },
+    {
+      "tMs": 0,
+      "type": "CALL",
+      "call": "H03",
+      "floor": 3,
+      "registeredMs": 0,
+      "state": "QUEUED"
+    },
+    {
+      "tMs": 0,
+      "type": "CALL",
+      "call": "H08",
+      "floor": 8,
+      "registeredMs": 0,
+      "state": "QUEUED"
+    },
+    {
+      "tMs": 0,
+      "type": "DISPATCH",
+      "columns": [
+        "H03",
+        "H08"
+      ],
+      "rows": [
+        "A",
+        "B",
+        "C"
+      ],
+      "matrix": [
+        [
+          2828,
+          6000
+        ],
+        [
+          4000,
+          9000
+        ],
+        [
+          27400,
+          22400
+        ]
+      ],
+      "allowed": [
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "optimal": {
+        "pairs": [
+          {
+            "car": "A",
+            "column": 1,
+            "etaMs": 6000
+          },
+          {
+            "car": "B",
+            "column": 0,
+            "etaMs": 4000
+          }
+        ],
+        "totalEtaMs": 10000
+      },
+      "greedy": {
+        "pairs": [
+          {
+            "car": "A",
+            "column": 0,
+            "etaMs": 2828
+          },
+          {
+            "car": "B",
+            "column": 1,
+            "etaMs": 9000
+          }
+        ],
+        "totalEtaMs": 11828
+      }
+    },
+    {
+      "tMs": 0,
+      "type": "CALL",
+      "call": "H03",
+      "floor": 3,
+      "registeredMs": 0,
+      "state": "ASSIGNED",
+      "car": "B"
+    },
+    {
+      "tMs": 0,
+      "type": "CALL",
+      "call": "H08",
+      "floor": 8,
+      "registeredMs": 0,
+      "state": "ASSIGNED",
+      "car": "A"
+    },
+    {
+      "tMs": 0,
+      "type": "DEPART",
+      "car": "B",
+      "floor": 3
+    },
+    {
+      "tMs": 0,
+      "type": "DEPART",
+      "car": "A",
+      "floor": 8
+    },
+    {
+      "tMs": 3000,
+      "type": "ALARM",
+      "car": "A",
+      "code": "B1",
+      "reason": "LANDING_LOCK_LOST"
+    },
+    {
+      "tMs": 3000,
+      "type": "REQUEUE",
+      "call": "H08",
+      "floor": 8,
+      "registeredMs": 0,
+      "state": "QUEUED"
+    },
+    {
+      "tMs": 3000,
+      "type": "DISPATCH",
+      "columns": [
+        "H08"
+      ],
+      "rows": [
+        "A",
+        "B",
+        "C"
+      ],
+      "matrix": [
+        [
+          null
+        ],
+        [
+          null
+        ],
+        [
+          19400
+        ]
+      ],
+      "allowed": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          1
+        ]
+      ],
+      "optimal": {
+        "pairs": [
+          {
+            "car": "C",
+            "column": 0,
+            "etaMs": 19400
+          }
+        ],
+        "totalEtaMs": 19400
+      },
+      "greedy": {
+        "pairs": [],
+        "totalEtaMs": 0
+      }
+    },
+    {
+      "tMs": 3000,
+      "type": "CALL",
+      "call": "H08",
+      "floor": 8,
+      "registeredMs": 0,
+      "state": "ASSIGNED",
+      "car": "C"
+    },
+    {
+      "tMs": 4000,
+      "type": "CALL",
+      "call": "H03",
+      "floor": 3,
+      "registeredMs": 0,
+      "state": "ARRIVED",
+      "car": "B"
+    },
+    {
+      "tMs": 4000,
+      "type": "LOCKED",
+      "car": "A"
+    },
+    {
+      "tMs": 6400,
+      "type": "CALL",
+      "call": "H03",
+      "floor": 3,
+      "registeredMs": 0,
+      "state": "SERVED",
+      "car": "B"
+    },
+    {
+      "tMs": 11400,
+      "type": "DOOR_CLOSING",
+      "car": "B",
+      "floor": 3
+    },
+    {
+      "tMs": 13800,
+      "type": "DEPART",
+      "car": "B",
+      "floor": 1
+    },
+    {
+      "tMs": 16000,
+      "type": "DOOR_CLOSING",
+      "car": "C",
+      "floor": 10
+    },
+    {
+      "tMs": 17800,
+      "type": "DESTINATION",
+      "car": "B",
+      "floor": 1
+    },
+    {
+      "tMs": 18400,
+      "type": "DEPART",
+      "car": "C",
+      "floor": 8
+    },
+    {
+      "tMs": 22400,
+      "type": "CALL",
+      "call": "H08",
+      "floor": 8,
+      "registeredMs": 0,
+      "state": "ARRIVED",
+      "car": "C"
+    },
+    {
+      "tMs": 24800,
+      "type": "CALL",
+      "call": "H08",
+      "floor": 8,
+      "registeredMs": 0,
+      "state": "SERVED",
+      "car": "C"
+    },
+    {
+      "tMs": 25200,
+      "type": "DOOR_CLOSING",
+      "car": "B",
+      "floor": 1
+    },
+    {
+      "tMs": 29800,
+      "type": "DOOR_CLOSING",
+      "car": "C",
+      "floor": 8
+    },
+    {
+      "tMs": 32200,
+      "type": "DEPART",
+      "car": "C",
+      "floor": 10
+    },
+    {
+      "tMs": 36200,
+      "type": "DESTINATION",
+      "car": "C",
+      "floor": 10
+    },
+    {
+      "tMs": 43600,
+      "type": "DOOR_CLOSING",
+      "car": "C",
+      "floor": 10
+    },
+    {
+      "tMs": 46000,
+      "type": "DIAGNOSTICS",
+      "car": "A"
+    },
+    {
+      "tMs": 52000,
+      "type": "RESET"
+    }
+  ],
+  "motions": [
+    {
+      "car": "B",
+      "fromMm": 0,
+      "toMm": 6000,
+      "t0Ms": 0,
+      "t1Ms": 4000,
+      "profile": [
+        {
+          "dtMs": 2000,
+          "xMm": 0,
+          "dxMm": 3000,
+          "v0MmPerSec": 0,
+          "v1MmPerSec": 3000
+        },
+        {
+          "dtMs": 2000,
+          "xMm": 3000,
+          "dxMm": 3000,
+          "v0MmPerSec": 3000,
+          "v1MmPerSec": 0
+        }
+      ]
+    },
+    {
+      "car": "A",
+      "fromMm": 9000,
+      "toMm": 15000,
+      "t0Ms": 0,
+      "t1Ms": 3000,
+      "profile": [
+        {
+          "dtMs": 2000,
+          "xMm": 0,
+          "dxMm": 3000,
+          "v0MmPerSec": 0,
+          "v1MmPerSec": 3000
+        },
+        {
+          "dtMs": 1000,
+          "xMm": 3000,
+          "dxMm": 3000,
+          "v0MmPerSec": 3000,
+          "v1MmPerSec": 3000
+        }
+      ]
+    },
+    {
+      "car": "A",
+      "fromMm": 15000,
+      "toMm": 16500,
+      "t0Ms": 3000,
+      "t1Ms": 4000,
+      "profile": [
+        {
+          "dtMs": 1000,
+          "xMm": 0,
+          "dxMm": 1500,
+          "v0MmPerSec": 3000,
+          "v1MmPerSec": 0
+        }
+      ]
+    },
+    {
+      "car": "B",
+      "fromMm": 6000,
+      "toMm": 0,
+      "t0Ms": 13800,
+      "t1Ms": 17800,
+      "profile": [
+        {
+          "dtMs": 2000,
+          "xMm": 0,
+          "dxMm": -3000,
+          "v0MmPerSec": 0,
+          "v1MmPerSec": -3000
+        },
+        {
+          "dtMs": 2000,
+          "xMm": -3000,
+          "dxMm": -3000,
+          "v0MmPerSec": -3000,
+          "v1MmPerSec": 0
+        }
+      ]
+    },
+    {
+      "car": "C",
+      "fromMm": 27000,
+      "toMm": 21000,
+      "t0Ms": 18400,
+      "t1Ms": 22400,
+      "profile": [
+        {
+          "dtMs": 2000,
+          "xMm": 0,
+          "dxMm": -3000,
+          "v0MmPerSec": 0,
+          "v1MmPerSec": -3000
+        },
+        {
+          "dtMs": 2000,
+          "xMm": -3000,
+          "dxMm": -3000,
+          "v0MmPerSec": -3000,
+          "v1MmPerSec": 0
+        }
+      ]
+    },
+    {
+      "car": "C",
+      "fromMm": 21000,
+      "toMm": 27000,
+      "t0Ms": 32200,
+      "t1Ms": 36200,
+      "profile": [
+        {
+          "dtMs": 2000,
+          "xMm": 0,
+          "dxMm": 3000,
+          "v0MmPerSec": 0,
+          "v1MmPerSec": 3000
+        },
+        {
+          "dtMs": 2000,
+          "xMm": 3000,
+          "dxMm": 3000,
+          "v0MmPerSec": 3000,
+          "v1MmPerSec": 0
+        }
+      ]
+    }
+  ],
+  "doors": [
+    {
+      "car": "C",
+      "floor": 10,
+      "t0Ms": 0,
+      "t1Ms": 16000,
+      "fromPermille": 1000,
+      "toPermille": 1000
+    },
+    {
+      "car": "B",
+      "floor": 3,
+      "t0Ms": 4000,
+      "t1Ms": 6400,
+      "fromPermille": 0,
+      "toPermille": 1000
+    },
+    {
+      "car": "B",
+      "floor": 3,
+      "t0Ms": 11400,
+      "t1Ms": 13800,
+      "fromPermille": 1000,
+      "toPermille": 0
+    },
+    {
+      "car": "C",
+      "floor": 10,
+      "t0Ms": 16000,
+      "t1Ms": 18400,
+      "fromPermille": 1000,
+      "toPermille": 0
+    },
+    {
+      "car": "B",
+      "floor": 1,
+      "t0Ms": 17800,
+      "t1Ms": 20200,
+      "fromPermille": 0,
+      "toPermille": 1000
+    },
+    {
+      "car": "C",
+      "floor": 8,
+      "t0Ms": 22400,
+      "t1Ms": 24800,
+      "fromPermille": 0,
+      "toPermille": 1000
+    },
+    {
+      "car": "B",
+      "floor": 1,
+      "t0Ms": 25200,
+      "t1Ms": 27600,
+      "fromPermille": 1000,
+      "toPermille": 0
+    },
+    {
+      "car": "C",
+      "floor": 8,
+      "t0Ms": 29800,
+      "t1Ms": 32200,
+      "fromPermille": 1000,
+      "toPermille": 0
+    },
+    {
+      "car": "C",
+      "floor": 10,
+      "t0Ms": 36200,
+      "t1Ms": 38600,
+      "fromPermille": 0,
+      "toPermille": 1000
+    },
+    {
+      "car": "C",
+      "floor": 10,
+      "t0Ms": 43600,
+      "t1Ms": 46000,
+      "fromPermille": 1000,
+      "toPermille": 0
+    }
+  ],
+  "durationMs": 52000
+}

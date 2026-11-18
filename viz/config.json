@@ -1,0 +1,15 @@
+{
+  "approximate": true,
+  "note": "Примерные параметры выставочной модели",
+  "floorHeightMm": 3000,
+  "floors": 10,
+  "maxSpeedMmPerSec": 3000,
+  "accelMmPerSec2": 1500,
+  "emergencyDecelMmPerSec2": 3000,
+  "motionProfile": "trapezoid-no-jerk-limit",
+  "doorTravelMs": 2400,
+  "doorHoldMs": 5000,
+  "initialDoorHoldMs": 16000,
+  "diagnosticsMs": 6000,
+  "initialFloors": {"A": 4, "B": 1, "C": 10}
+}
