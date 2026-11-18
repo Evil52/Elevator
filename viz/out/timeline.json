@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "source": "python-demo",
   "initial": {
     "A": 9000,
     "B": 0,

@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 
 VIZ = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(VIZ / 'blender/sim'))
+from playback import position_at
 
 
 def read_glb(path):
@@ -63,8 +65,6 @@ def validate(timeline, path):
         coords = floats(sampler['output'])
         return dict(zip(times, zip(coords[::3], coords[1::3], coords[2::3]), strict=True))
 
-    sys.path.insert(0, str(VIZ / 'blender/sim'))
-    from model import position_at
     total = 0
     for car in 'ABC':
         expected = times_for_car(timeline, car)

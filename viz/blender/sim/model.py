@@ -1,17 +1,14 @@
-"""Событийная демонстрация. Все расчёты выполняются в целых числах."""
+"""Генератор демонстрационной записи Elevator с примерной кинематикой и ETA."""
 import itertools
 import json
 from math import isqrt
 from pathlib import Path
 
+from playback import position_at, rounded, sample
+
 VIZ = Path(__file__).resolve().parents[2]
 CONFIG = json.loads((VIZ / "config.json").read_text())
 CARS = tuple("ABC")
-
-
-def rounded(n, d):
-    """Ближайшее целое, половины округляются от нуля."""
-    return (1 if n >= 0 else -1) * ((2 * abs(n) + d) // (2 * d))
 
 
 def ceil_div(n, d):
@@ -54,31 +51,6 @@ def motion_from_parts(car, start, end, when, parts):
 def make_motion(car, start, end, when, start_speed=0):
     return motion_from_parts(car, start, end, when,
                              travel_phases(abs(end - start), abs(start_speed)))
-
-
-def sample(motion, t):
-    if t >= motion["t1Ms"]:
-        return motion["toMm"], 0
-    elapsed = max(0, t - motion["t0Ms"])
-    for p in motion["profile"]:
-        dt = p["dtMs"]
-        if elapsed <= dt:
-            v0, v1 = abs(p["v0MmPerSec"]), abs(p["v1MmPerSec"])
-            numerator = 2 * v0 * dt * elapsed + (v1 - v0) * elapsed**2
-            offset = rounded(p["dxMm"] * numerator, (v0 + v1) * dt**2)
-            speed = p["v0MmPerSec"] + rounded((p["v1MmPerSec"] - p["v0MmPerSec"]) * elapsed, dt)
-            return motion["fromMm"] + p["xMm"] + offset, speed
-        elapsed -= dt
-    return motion["toMm"], 0
-
-
-def position_at(line, car, t):
-    if "durationMs" in line and t >= line["durationMs"]:
-        return line["initial"][car]
-    for motion in reversed(line["motions"]):
-        if motion["car"] == car and motion["t0Ms"] <= t:
-            return sample(motion, t)[0]
-    return line["initial"][car]
 
 
 def speed_at(motion, t):
@@ -146,7 +118,7 @@ def scenario():
     calls = [dict(id="H03", floor=3, direction="DOWN", registeredMs=0),
              dict(id="H08", floor=8, direction="UP", registeredMs=0)]
     events, motions, doors = [], [], []
-    line = dict(schemaVersion=1, initial=initial, calls=calls, events=events, motions=motions, doors=doors)
+    line = dict(schemaVersion=1, source="python-demo", initial=initial, calls=calls, events=events, motions=motions, doors=doors)
     door_time, hold = CONFIG["doorTravelMs"], CONFIG["doorHoldMs"]
     ready = CONFIG["initialDoorHoldMs"] + door_time
 

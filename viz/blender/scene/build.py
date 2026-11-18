@@ -13,6 +13,7 @@ VIZ = SCENE_DIR.parents[1]
 sys.path.insert(0, str(SCENE_DIR))
 sys.path.insert(0, str(VIZ / 'blender/sim'))
 
+from playback import position_at
 from check import times_for_car, validate
 from geometry import DOOR_TRAVEL, architecture, color
 
@@ -23,12 +24,6 @@ def key(obj, channel, t):
 
 def animate(timeline, parts):
     cars, doors, landings, lamps = parts
-    if timeline['motions']:
-        from model import position_at
-    else:
-        def position_at(data, car, t):
-            return data['initial'][car]
-
     scene = bpy.context.scene
     # Кадр равен миллисекунде. Экспортер переносит шкалу в секунды glTF.
     scene.render.fps = 1000
@@ -129,14 +124,15 @@ def studio():
 def run():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--timeline', type=Path, default=VIZ / 'out/timeline.json')
-    parser.add_argument('--out', type=Path, default=VIZ / 'out')
+    parser.add_argument('--out', type=Path, help='Каталог для GLB и кадров Blender')
     parser.add_argument('--skip-previews', action='store_true')
     args = parser.parse_args(sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else [])
-    args.out.mkdir(parents=True, exist_ok=True)
+    scene_dir = args.out or VIZ / 'out'
+    scene_dir.mkdir(parents=True, exist_ok=True)
     timeline = json.loads(args.timeline.read_text())
     bpy.ops.wm.read_factory_settings(use_empty=True)
     animate(timeline, architecture())
-    path = args.out / 'scene.glb'
+    path = scene_dir / 'scene.glb'
     bpy.ops.export_scene.gltf(filepath=str(path), export_format='GLB', export_force_sampling=False,
                               export_animation_mode='ACTIVE_ACTIONS', export_optimize_animation_size=False,
                               export_optimize_animation_keep_anim_object=True, export_yup=True,
@@ -145,6 +141,8 @@ def run():
     validate(timeline, path)
     if args.skip_previews:
         return
+    preview_dir = args.out or VIZ / '.cache/previews'
+    preview_dir.mkdir(parents=True, exist_ok=True)
     studio()
     events = timeline['events']
     def first(predicate):
@@ -154,7 +152,7 @@ def run():
     for name, t in moments:
         scene = bpy.context.scene
         scene.frame_set(t)
-        scene.render.filepath = str(args.out / f'preview-{name}.png')
+        scene.render.filepath = str(preview_dir / f'preview-{name}.png')
         bpy.ops.render.render(write_still=True)
         print(f'Превью {name} · {t} мс')
 
