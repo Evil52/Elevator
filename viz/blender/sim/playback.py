@@ -21,7 +21,7 @@ def sample(motion, t):
 
 
 def position_at(line, car, t):
-    if "durationMs" in line and t >= line["durationMs"]:
+    if "durationMs" in line and t >= line["durationMs"] and line["events"][-1]["type"] == "RESET":
         return line["initial"][car]
     for motion in reversed(line["motions"]):
         if motion["car"] == car and motion["t0Ms"] <= t:

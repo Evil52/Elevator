@@ -26,6 +26,11 @@ class MotionTests(unittest.TestCase):
         self.assertTrue(all(a >= b for a, b in zip(samples, samples[1:])))
         self.assertEqual(samples[-1], 727)
 
+    def test_rust_trip_finishes_at_the_recorded_stop(self):
+        line = json.loads((VIZ / "recordings/single-trip/timeline.json").read_bytes())
+        self.assertEqual(position_at(line, "A", 1250), 766)
+        self.assertEqual(position_at(line, "A", line["durationMs"]), 9000)
+
     def test_golden(self):
         line = scenario()
         for vector in json.loads((VIZ / "golden.json").read_text()):

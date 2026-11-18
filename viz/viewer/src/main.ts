@@ -1,5 +1,6 @@
 import './style.css'
-import timelineUrl from '../../out/timeline.json?url'
+import demoUrl from '../../out/timeline.json?url'
+import silUrl from '../../recordings/single-trip/timeline.json?url'
 import { parseTimeline, carIds, type ModelEvent, type Status } from './timeline'
 import { floorLabel, lastEventAt, stateAt, stepEvent, type Snapshot, type Cabin } from './player'
 import { icon, iconsIn } from './icons'
@@ -13,7 +14,8 @@ const fmt = (value: number, digits: number) =>
 const sec = (ms: number) =>
   (ms / 1000).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 3 })
 const pad = (n: number) => String(n).padStart(2, '0')
-const clock = (ms: number) => pad(Math.floor(ms / 60000)) + ':' + pad(Math.floor(ms / 1000) % 60)
+const shortClock = (ms: number) =>
+  pad(Math.floor(ms / 60000)) + ':' + pad(Math.floor(ms / 1000) % 60)
 const modeNames: Record<Cabin['mode'], string> = {
   READY: 'Готова',
   MOVING: 'В движении',
@@ -39,6 +41,10 @@ function description(e: ModelEvent) {
     return 'Кабина ' + e.car + ' закрывает двери · ' + e.floor + ' этаж'
   const titles: Record<string, string> = {
     START: 'Сценарий запущен',
+    SAMPLE_ACCEL: 'Контрольная точка разгона',
+    SAMPLE_CRUISE: 'Движение на постоянной скорости',
+    SAMPLE_BRAKE: 'Контрольная точка торможения',
+    END: 'Поездка завершена',
     DISPATCH: 'Диспетчер рассчитал матрицу ETA',
     ALARM: 'B1 · потеряно подтверждение замка',
     LOCKED: 'Кабина ' + e.car + ' остановлена и заблокирована',
@@ -64,10 +70,23 @@ function explain(title: string, body: string, symbol: string) {
   dialog.showModal()
 }
 async function start() {
-  const response = await fetch(timelineUrl)
+  const singleTrip = new URLSearchParams(location.search).get('scenario') === 'sil'
+  const response = await fetch(singleTrip ? silUrl : demoUrl)
   if (!response.ok) throw new Error('Не удалось загрузить timeline.json')
   const line = parseTimeline(await response.json())
   const demo = line.source === 'python-demo'
+  const title = singleTrip ? 'Поездка с 1-го на 4-й этаж' : 'Отказ замка двери'
+  const summary = singleTrip
+    ? 'Кабина A едет с 1-го на 4-й этаж. Траекторию и ETA рассчитывает Rust-ядро.'
+    : 'Два одновременных вызова, три кабины и аварийное переназначение.'
+  const clock = (ms: number) =>
+    singleTrip
+      ? shortClock(ms) + ',' + String(Math.floor(ms) % 1000).padStart(3, '0')
+      : shortClock(ms)
+  el('scenario-title').textContent = title
+  el('scenario-summary').textContent = summary
+  el('scenario-number').textContent = singleTrip ? 'СЦЕНАРИЙ 02 · SIL' : 'СЦЕНАРИЙ 01'
+  el('scenario-info').setAttribute('aria-label', 'Выбор сценария. ' + title)
   el('matrix-source').textContent = demo
     ? 'Демо Python · приближённая ETA'
     : line.source === 'rust-sil'
@@ -87,6 +106,13 @@ async function start() {
   const alarmIndex = line.events.findIndex((e) => e.type === 'ALARM')
   const phases = [
     { name: 'Назначение', index: line.events.findIndex((e) => e.type === 'DISPATCH') },
+    { name: 'Разгон', index: line.events.findIndex((e) => e.type === 'SAMPLE_ACCEL') },
+    { name: 'Полный ход', index: line.events.findIndex((e) => e.type === 'SAMPLE_CRUISE') },
+    { name: 'Торможение', index: line.events.findIndex((e) => e.type === 'SAMPLE_BRAKE') },
+    {
+      name: 'Остановка',
+      index: singleTrip ? line.events.findIndex((e) => e.state === 'ARRIVED') : -1,
+    },
     { name: 'Авария B1', index: alarmIndex },
     { name: 'Обслуживание', index: line.events.findIndex((e) => e.state === 'SERVED') },
     { name: 'Диагностика', index: line.events.findIndex((e) => e.type === 'DIAGNOSTICS') },
@@ -256,14 +282,15 @@ async function start() {
     for (const id of carIds) {
       const car = s.cars[id],
         mode = el('mode-' + id)
-      mode.textContent = modeNames[car.mode]
+      mode.textContent = singleTrip && id !== 'A' ? 'В резерве' : modeNames[car.mode]
       mode.classList.toggle('fault', s.alarm === id)
       el('floor-' + id).textContent = floorLabel(car.positionMm)
       el('floor-' + id).parentElement!.title = car.positionMm + ' мм'
       el('speed-' + id).textContent =
         (car.speed === 0 ? '' : car.speed > 0 ? '↑ ' : '↓ ') +
         fmt(Math.abs(car.speed) / 1000, 1) +
-        ' м/с'
+        ' м/с' +
+        (singleTrip && id === 'A' ? ' · ' + car.positionMm + ' мм' : '')
     }
     if (index !== lastPanel) {
       el('matrix').innerHTML = matrix(s)
@@ -411,8 +438,12 @@ async function start() {
     )
   el('scenario-info').onclick = () =>
     explain(
-      'Отказ замка двери',
-      '<p>Одновременно поступают вызовы с 3-го этажа вниз и с 8-го вверх. В пути кабина A теряет подтверждение замка. Диспетчер передаёт вызов другой кабине.</p><div class="jump-list">' +
+      title,
+      '<p>' +
+        (singleTrip
+          ? 'Кабина A начинает движение из покоя. Выберите контрольную точку, чтобы увидеть координату и скорость из записи. ETA заканчивается в момент точной остановки перед открытием дверей.'
+          : 'Одновременно поступают вызовы с 3-го этажа вниз и с 8-го вверх. В пути кабина A теряет подтверждение замка. Диспетчер передаёт вызов другой кабине.') +
+        '</p><div class="jump-list">' +
         phases
           .map(
             (p) =>
@@ -425,7 +456,11 @@ async function start() {
               '</time></button>',
           )
           .join('') +
-        '</div>',
+        '</div><a class="switch-recording" href="' +
+        (singleTrip ? '?scenario=demo' : '?scenario=sil') +
+        '">' +
+        (singleTrip ? 'Открыть демо с отказом B1' : 'Открыть поездку Rust SIL') +
+        ' →</a>',
       'route',
     )
   function projection(front: boolean) {
