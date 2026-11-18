@@ -5,6 +5,7 @@
 //! без кучи и без `unsafe`. Размеры матрицы заданы типом, поэтому выделять память не нужно.
 
 pub mod calls;
+pub mod dispatcher;
 pub mod eta;
 pub mod motion;
 
