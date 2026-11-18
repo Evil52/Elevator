@@ -2,7 +2,6 @@
 name = "Elevator"
 version = "0.1.0"
 edition = "2024"
-rust-version.workspace = true
 
 [dependencies]
 
@@ -11,10 +10,6 @@ workspace = true
 
 [workspace]
 members = ["crates/elevator-wire"]
-
-[workspace.package]
-rust-version = "1.97"
-
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
