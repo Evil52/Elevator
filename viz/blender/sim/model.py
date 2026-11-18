@@ -213,7 +213,17 @@ def scenario():
             hi = mid
     fault = lo
     at, velocity = sample(run, fault)
-    run.update(t1Ms=fault, toMm=at)
+    elapsed = fault - run["t0Ms"]
+    completed = []
+    for phase in run["profile"]:
+        if elapsed <= 0:
+            break
+        if elapsed < phase["dtMs"]:
+            phase = dict(phase, dtMs=elapsed, v1MmPerSec=velocity,
+                         dxMm=at - run["fromMm"] - phase["xMm"])
+        completed.append(phase)
+        elapsed -= phase["dtMs"]
+    run.update(t1Ms=fault, toMm=at, profile=completed)
     event(fault, "ALARM", car=failed, code="B1", reason="LANDING_LOCK_LOST")
     stop_time = ceil_div(abs(velocity) * 1000, CONFIG["emergencyDecelMmPerSec2"])
     stop = at + rounded(velocity * stop_time, 2000)

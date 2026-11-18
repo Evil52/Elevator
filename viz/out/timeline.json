@@ -363,18 +363,11 @@
           "v1MmPerSec": 3000
         },
         {
-          "dtMs": 2000,
+          "dtMs": 1000,
           "xMm": 3000,
-          "dxMm": 6000,
-          "v0MmPerSec": 3000,
-          "v1MmPerSec": 3000
-        },
-        {
-          "dtMs": 2000,
-          "xMm": 9000,
           "dxMm": 3000,
           "v0MmPerSec": 3000,
-          "v1MmPerSec": 0
+          "v1MmPerSec": 3000
         }
       ]
     },
