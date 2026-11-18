@@ -261,4 +261,3 @@ if __name__ == "__main__":
     line = scenario()
     out.write_bytes(serialize(line))
     print(f"{out}: {len(line['events'])} событий")
-

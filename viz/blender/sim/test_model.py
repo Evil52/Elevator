@@ -120,4 +120,3 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(raw, serialize(scenario()))
         json.loads(raw, parse_float=lambda value: self.fail(value))
         self.assertTrue(CONFIG["approximate"])
-
