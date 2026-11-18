@@ -35,7 +35,6 @@ export async function createScene(
     generator.dispose()
     renderer = gpu
   } catch {
-    // При отсутствии WebGL сохраняем интерактивную проекцию той же геометрии.
     renderer = new SVGRenderer()
     renderer.setPrecision(1)
     renderer.setQuality('low')

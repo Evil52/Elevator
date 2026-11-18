@@ -67,7 +67,6 @@ class DispatchTests(unittest.TestCase):
 
     def test_collective_routes_and_door_residual(self):
         self.assertEqual(eta(0, 0, 3, "DOWN", wait_ms=700), 4700)
-        # Кабина едет вверх к восьмому этажу.
         self.assertIsNotNone(eta(3000, 1500, 5, "UP", target_floor=8))
         self.assertIsNone(eta(3000, 1500, 5, "DOWN", target_floor=8))
         self.assertIsNone(eta(3000, 1500, 2, "UP", target_floor=8))

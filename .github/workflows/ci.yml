@@ -15,8 +15,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
-# Версию компилятора, компоненты и target берём из rust-toolchain.toml:
-# `rustup toolchain install` без аргументов ставит ровно то, что там записано.
 
 jobs:
   fmt:

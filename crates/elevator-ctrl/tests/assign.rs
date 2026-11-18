@@ -1,9 +1,3 @@
-//! Тесты назначения кабин на вызовы.
-//!
-//! Эталон `oracle` перебирает все допустимые назначения и выбирает лучшее по правилам
-//! из README: сначала больше пар, потом меньше сумма ETA, потом предпочтение по порядку.
-//! Реализация `assign` должна давать тот же ответ.
-
 use elevator_ctrl::{Cell, assign};
 
 type Matrix<const C: usize, const K: usize> = [[Cell; K]; C];
@@ -17,7 +11,6 @@ const fn no(eta_ms: u32) -> Cell {
     Cell::forbidden(eta_ms)
 }
 
-// Сколько пар назначено и чему равна сумма ETA (в u64, чтобы не переполниться).
 fn totals<const C: usize, const K: usize>(m: &Matrix<C, K>, picks: &Picks<C>) -> (usize, u64) {
     let mut count = 0;
     let mut sum = 0_u64;
@@ -30,8 +23,6 @@ fn totals<const C: usize, const K: usize>(m: &Matrix<C, K>, picks: &Picks<C>) ->
     (count, sum)
 }
 
-// Предпочтение при равенстве числа пар и суммы: идём по кабинам с первой,
-// кабина с вызовом лучше кабины без вызова, меньший номер вызова лучше большего.
 fn prefers<const C: usize>(a: &Picks<C>, b: &Picks<C>) -> bool {
     for (x, y) in a.iter().zip(b) {
         match (x, y) {
@@ -84,7 +75,6 @@ fn oracle<const C: usize, const K: usize>(m: &Matrix<C, K>) -> Picks<C> {
     best.expect("перебор всегда находит хотя бы пустое назначение")
 }
 
-// Назначение корректно: вызов один раз, только по допустимым парам.
 fn assert_valid<const C: usize, const K: usize>(m: &Matrix<C, K>, picks: &Picks<C>) {
     for (car, (row, pick)) in m.iter().zip(picks).enumerate() {
         if let Some(call) = pick {
@@ -99,7 +89,6 @@ fn assert_valid<const C: usize, const K: usize>(m: &Matrix<C, K>, picks: &Picks<
     }
 }
 
-// Ожидание, посчитанное руками, должно совпасть с эталоном: иначе ошибка в самом тесте.
 fn check<const C: usize, const K: usize>(m: &Matrix<C, K>, expected: Picks<C>) {
     assert_eq!(
         oracle(m),
@@ -126,8 +115,6 @@ impl Rng {
     }
 }
 
-// Случайные матрицы с малым разбросом ETA (много ничьих) и четвертью запрещённых пар.
-// У запрещённых ETA тоже случайный, часто нулевой: он не должен влиять на ответ.
 fn fuzz<const C: usize, const K: usize>(seed: u64, cases: u32) {
     let mut rng = Rng(seed);
     for _ in 0..cases {
@@ -161,8 +148,6 @@ fn single_call_goes_to_the_fastest_car() {
 
 #[test]
 fn global_optimum_beats_nearest_first() {
-    // Жадный выбор взял бы самую дешёвую ячейку A-X (1) и отдал Y кабине B за 100: итого 101.
-    // Глобально лучше A-Y и B-X: 2 + 2 = 4.
     let m = [[ok(1), ok(2)], [ok(2), ok(100)], [ok(100), ok(100)]];
     check(&m, [Some(1), Some(0), None]);
 }
@@ -181,7 +166,6 @@ fn all_forbidden_gives_nothing() {
 
 #[test]
 fn more_pairs_beat_lower_total_eta() {
-    // Одна пара B-X за 1 дешевле, чем две A-X и B-Y за 1010, но пар должно быть больше.
     let m = [[ok(10), no(0)], [ok(1), ok(1000)], [no(0), no(0)]];
     check(&m, [Some(0), Some(1), None]);
 }
@@ -220,22 +204,18 @@ fn equal_eta_two_calls_three_cars_leaves_the_last_car_idle() {
 
 #[test]
 fn tie_in_total_prefers_lower_car_on_earlier_call() {
-    // A-X + B-Y = 1 + 4 = 5 и A-Y + B-X = 2 + 3 = 5: сумма одна, побеждает A на первом вызове.
     let m = [[ok(1), ok(2)], [ok(3), ok(4)], [no(0), no(0)]];
     check(&m, [Some(0), Some(1), None]);
 }
 
 #[test]
 fn tie_between_car_sets_prefers_lower_car_ids() {
-    // Три назначения по 2 пары и сумме 2: (A, B), (A, C), (C, B). Берётся (A, B).
     let m = [[ok(1), ok(9)], [ok(9), ok(1)], [ok(1), ok(1)]];
     check(&m, [Some(0), Some(1), None]);
 }
 
 #[test]
 fn eta_sums_do_not_overflow() {
-    // Диагональ: MAX + MAX + 2 = 2^33, в u32 это 0, и она показалась бы самой дешёвой.
-    // Настоящий оптимум: циклический сдвиг по 300 000 (всего 900 000).
     let max = u32::MAX;
     let m = [
         [ok(max), ok(300_000), ok(max)],

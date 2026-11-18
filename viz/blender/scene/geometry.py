@@ -1,4 +1,3 @@
-"""Геометрия разреза. Один метр Blender соответствует одному метру glTF."""
 from math import cos, pi, sin
 import bpy
 from mathutils import Vector
@@ -29,7 +28,6 @@ def material(name, tint, metal=0.0, emission=0.0):
 
 
 class Parts:
-    """Общий меш для деталей с одинаковым преобразованием."""
     def __init__(self, name):
         self.name = name
         self.vertices = []
@@ -111,7 +109,6 @@ def architecture():
     lamps = {key: material(f'Cab {key} pilot', tint, .05, .65) for key, tint in COLORS.items()}
     structure = Parts('Structure')
 
-    # Отдельные уровни подиума и открытые кромки плиты читаются в общем виде.
     structure.box(0, .1, -.70, 16.4, 5.3, .52, frame)
     structure.box(0, .1, -.37, 16.0, 5.0, .24, concrete)
     structure.box(0, .1, -.15, 15.3, 4.55, .24, face)
@@ -125,7 +122,6 @@ def architecture():
             structure.box(x+dx, 1.55, 15, .14, .15, 30, face)
         for dx in (-.32, -.18):
             structure.rod((x+dx,.82,0), (x+dx,.82,30.65), .027, face)
-        # Оголовки шахт, шкив и привод на крыше.
         structure.box(x, .3, 30.20, 3.95, 3.04, .24, concrete)
         structure.box(x, .4, 30.45, 2.95, 1.64, .21, frame)
         structure.box(x-.62, .64, 30.78, .99, .8, .69, face)
@@ -145,7 +141,6 @@ def architecture():
     for n in range(1, 11):
         z = (n-1)*3
         level = Parts(f'Level_{n:02}')
-        # Снята передняя стена: открыты направляющие и кабины, посадочные двери видны с обратной стороны.
         level.box(0, 1.38, z, 13.67, 1.08, .19, concrete)
         level.box(0, -1.33, z-.035, 13.7, .27, .14, steel)
         for x in (-6.68,-2.2,2.2,6.68):
