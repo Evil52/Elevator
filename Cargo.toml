@@ -9,7 +9,7 @@ edition = "2024"
 workspace = true
 
 [workspace]
-members = ["crates/elevator-wire"]
+members = ["crates/elevator-wire", "crates/elevator-ctrl"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
