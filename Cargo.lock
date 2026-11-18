@@ -7,5 +7,9 @@ name = "Elevator"
 version = "0.1.0"
 
 [[package]]
+name = "elevator-ctrl"
+version = "0.1.0"
+
+[[package]]
 name = "elevator-wire"
 version = "0.1.0"

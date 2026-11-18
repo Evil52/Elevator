@@ -10,7 +10,7 @@ rust-version.workspace = true
 workspace = true
 
 [workspace]
-members = ["crates/elevator-wire"]
+members = ["crates/elevator-wire", "crates/elevator-ctrl"]
 
 [workspace.package]
 rust-version = "1.97"
