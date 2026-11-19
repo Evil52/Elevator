@@ -6,7 +6,6 @@ fn samples_the_same_jerk_limited_trip_as_eta() {
     let trip = params.rest_trip(9000).unwrap();
     assert_eq!(Some(trip.duration_ms()), params.time_to_stop_ms(9000, 0));
     assert_eq!(trip.duration_ms(), 5500);
-    // Аналитические точки семи фаз, начиная с x = j*t³/6.
     for (t, position, speed) in [
         (0, 0, 0),
         (250, 8, 94),

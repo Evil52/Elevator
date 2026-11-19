@@ -1,5 +1,3 @@
-//! Детерминированный прогон одной поездки на компьютере, вывод — timeline v1.
-
 use std::io::{self, Write};
 
 use elevator_ctrl::{
@@ -17,7 +15,6 @@ const FLOOR_HEIGHT_MM: u32 = 3000;
 const OPEN_MS: u32 = 2400;
 const SAMPLE_MS: u32 = 50;
 
-// Узлы записи принадлежат ядру. Поля v1 между ними задают короткие участки для проигрывателя.
 fn profile(trip: &RestTrip) -> Vec<Value> {
     let mut phases = Vec::new();
     let mut start = 0;
