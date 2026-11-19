@@ -1,0 +1,12 @@
+{
+  "bootId": 1,
+  "message": {
+    "hello": {
+      "deviceId": 3735928559,
+      "resetReason": "watchdog"
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

@@ -1,0 +1,9 @@
+{
+  "bootId": 1,
+  "message": {
+    "bogus": {}
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}
