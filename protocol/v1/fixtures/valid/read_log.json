@@ -1,0 +1,12 @@
+{
+  "bootId": 1,
+  "message": {
+    "readLog": {
+      "fromIndex": 300,
+      "requestId": 13
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

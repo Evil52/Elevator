@@ -1,0 +1,17 @@
+{
+  "bootId": 1,
+  "message": {
+    "callFloor": {
+      "direction": "down",
+      "floor": 5,
+      "requestId": 7
+    },
+    "hello": {
+      "deviceId": 1,
+      "resetReason": "powerOn"
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

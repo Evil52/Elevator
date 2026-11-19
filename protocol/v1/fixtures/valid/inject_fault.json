@@ -1,0 +1,12 @@
+{
+  "bootId": 1,
+  "message": {
+    "injectFault": {
+      "car": 0,
+      "requestId": 10
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

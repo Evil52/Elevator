@@ -1,8 +1,9 @@
 use elevator_wire::protocol::{
     ALARMS_PER_PAGE, AckAlarm, Alarm, AlarmKind, AlarmPage, AlarmState, CallFloor, CarMode,
-    CarSnapshot, CommandResult, CommandStatus, Direction, DoorState, Envelope, Hello, InjectFault,
-    JSON_SAFE_MAX, Message, MessageError, RecoverCar, Rejection, ResetReason, SimAction,
-    SimControl, decode_message, encode_message,
+    CarSnapshot, CommandResult, CommandStatus, Direction, DoorState, EVENTS_PER_CHUNK, Envelope,
+    Event, EventKind, EventLogChunk, Hello, InjectFault, JSON_SAFE_MAX, Message, MessageError,
+    ReadLog, RecoverCar, Rejection, ResetReason, SimAction, SimControl, decode_message,
+    encode_message,
 };
 use elevator_wire::{Decoder, MAX_FRAME, MAX_PAYLOAD, decode_frame, encode_frame};
 
@@ -492,6 +493,160 @@ fn an_alarm_time_at_the_json_limit_round_trips() {
 fn an_alarm_time_over_the_json_limit_is_rejected_in_any_slot() {
     for slot in 0..ALARMS_PER_PAGE {
         let envelope = page_with_time_in_slot(slot, JSON_SAFE_MAX + 1);
+        let mut buf = [0u8; MAX_PAYLOAD];
+        assert_eq!(
+            encode_message(&envelope, &mut buf),
+            Err(MessageError::OutOfRange),
+            "encode, slot {slot}"
+        );
+        let raw = postcard::to_slice(&envelope, &mut buf).unwrap();
+        assert_eq!(
+            decode_message(raw),
+            Err(MessageError::OutOfRange),
+            "decode, slot {slot}"
+        );
+    }
+}
+
+fn event(index: u32, at_ms: u64, kind: EventKind, car: Option<u8>, id: u32) -> Event {
+    Event {
+        index,
+        at_ms,
+        kind,
+        car,
+        id,
+    }
+}
+
+fn chunk_of(first_index: u32, dropped_before: u32, events: &[Event]) -> Envelope {
+    let mut items = [None; EVENTS_PER_CHUNK];
+    for (slot, event) in items.iter_mut().zip(events) {
+        *slot = Some(*event);
+    }
+    Envelope::new(
+        0,
+        0,
+        0,
+        Message::EventLogChunk(EventLogChunk {
+            first_index,
+            dropped_before,
+            events: items,
+        }),
+    )
+}
+
+fn two_event_chunk() -> Envelope {
+    chunk_of(
+        10,
+        0,
+        &[
+            event(10, 1000, EventKind::Assigned, Some(2), 7),
+            event(11, 2000, EventKind::Served, None, 7),
+        ],
+    )
+}
+
+fn read_log() -> Envelope {
+    Envelope::new(
+        1,
+        2,
+        3,
+        Message::ReadLog(ReadLog {
+            request_id: 5,
+            from_index: 300,
+        }),
+    )
+}
+
+fn full_chunk_at_the_limits() -> Envelope {
+    let events = [event(
+        u32::MAX,
+        JSON_SAFE_MAX,
+        EventKind::AlarmCleared,
+        Some(u8::MAX),
+        u32::MAX,
+    ); EVENTS_PER_CHUNK];
+    chunk_of(u32::MAX, u32::MAX, &events)
+}
+
+fn chunk_with_time_in_slot(slot: usize, at_ms: u64) -> Envelope {
+    let mut envelope = two_event_chunk();
+    if let Message::EventLogChunk(chunk) = &mut envelope.message {
+        chunk.events[slot] = Some(event(99, at_ms, EventKind::Requeued, None, 1));
+    }
+    envelope
+}
+
+#[test]
+fn event_log_chunks_round_trip() {
+    let all_kinds = [
+        EventKind::Assigned,
+        EventKind::Arrived,
+        EventKind::Served,
+        EventKind::Requeued,
+        EventKind::Cancelled,
+        EventKind::AlarmRaised,
+        EventKind::AlarmAcked,
+        EventKind::AlarmCleared,
+    ]
+    .map(|kind| event(5, 6, kind, Some(1), 2));
+    for envelope in [
+        chunk_of(0, 0, &[]),
+        two_event_chunk(),
+        chunk_of(5, 3, &all_kinds),
+        full_chunk_at_the_limits(),
+        read_log(),
+    ] {
+        let bytes = encoded(&envelope);
+        assert_ne!(bytes.len(), 0, "nothing encoded for {envelope:?}");
+        assert_eq!(decode_message(&bytes), Ok(envelope));
+    }
+}
+
+#[test]
+fn a_full_event_chunk_at_the_limits_fits_one_frame() {
+    let bytes = encoded(&full_chunk_at_the_limits());
+    assert_ne!(bytes.len(), 0, "nothing encoded");
+    assert!(bytes.len() <= MAX_PAYLOAD, "{} bytes", bytes.len());
+}
+
+#[test]
+fn read_log_has_known_bytes() {
+    let expected = [0x01, 0x01, 0x02, 0x03, 0x0A, 0x05, 0xAC, 0x02];
+    assert_eq!(encoded(&read_log()), expected);
+    assert_eq!(decode_message(&expected), Ok(read_log()));
+}
+
+#[test]
+fn event_log_chunk_has_known_bytes() {
+    let expected = [
+        0x01, 0x00, 0x00, 0x00, 0x09, 0x0A, 0x00, 0x01, 0x0A, 0xE8, 0x07, 0x00, 0x01, 0x02, 0x07,
+        0x01, 0x0B, 0xD0, 0x0F, 0x02, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    assert_eq!(encoded(&two_event_chunk()), expected);
+    assert_eq!(decode_message(&expected), Ok(two_event_chunk()));
+}
+
+#[test]
+fn an_unknown_event_kind_is_malformed() {
+    let mut bytes = encoded(&two_event_chunk());
+    assert_ne!(bytes.len(), 0, "nothing encoded");
+    bytes[11] = 0x09;
+    assert_eq!(decode_message(&bytes), Err(MessageError::Malformed));
+}
+
+#[test]
+fn an_event_time_at_the_json_limit_round_trips() {
+    let envelope = chunk_with_time_in_slot(7, JSON_SAFE_MAX);
+    let bytes = encoded(&envelope);
+    assert_ne!(bytes.len(), 0, "nothing encoded");
+    assert_eq!(decode_message(&bytes), Ok(envelope));
+}
+
+#[test]
+fn an_event_time_over_the_json_limit_is_rejected_in_any_slot() {
+    for slot in 0..EVENTS_PER_CHUNK {
+        let envelope = chunk_with_time_in_slot(slot, JSON_SAFE_MAX + 1);
         let mut buf = [0u8; MAX_PAYLOAD];
         assert_eq!(
             encode_message(&envelope, &mut buf),

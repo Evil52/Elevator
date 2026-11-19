@@ -1,0 +1,12 @@
+{
+  "bootId": 1,
+  "message": {
+    "recoverCar": {
+      "car": 0,
+      "requestId": 11
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

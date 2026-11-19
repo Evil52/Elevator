@@ -1,0 +1,671 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Envelope",
+  "type": "object",
+  "properties": {
+    "bootId": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "message": {
+      "$ref": "#/$defs/Message"
+    },
+    "runId": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "seq": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "bootId",
+    "runId",
+    "seq",
+    "message"
+  ],
+  "$defs": {
+    "AckAlarm": {
+      "type": "object",
+      "properties": {
+        "alarmId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "alarmId"
+      ]
+    },
+    "Alarm": {
+      "type": "object",
+      "properties": {
+        "car": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/AlarmKind"
+        },
+        "raisedAtMs": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0
+        },
+        "state": {
+          "$ref": "#/$defs/AlarmState"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "state",
+        "raisedAtMs"
+      ]
+    },
+    "AlarmKind": {
+      "type": "string",
+      "enum": [
+        "fireRecall",
+        "carFault",
+        "linkLost",
+        "logOverflow"
+      ]
+    },
+    "AlarmPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Alarm"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxItems": 8,
+          "minItems": 8
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "offset",
+        "items"
+      ]
+    },
+    "AlarmState": {
+      "type": "string",
+      "enum": [
+        "active",
+        "acknowledged",
+        "cleared"
+      ]
+    },
+    "CallFloor": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "floor": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "floor",
+        "direction"
+      ]
+    },
+    "CarMode": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "fireRecall",
+        "firefighters",
+        "unavailable"
+      ]
+    },
+    "CarSnapshot": {
+      "type": "object",
+      "properties": {
+        "car": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "doors": {
+          "$ref": "#/$defs/DoorState"
+        },
+        "downCalls": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "etaMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "floor": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "mode": {
+          "$ref": "#/$defs/CarMode"
+        },
+        "modelTimeMs": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0
+        },
+        "positionMm": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "speedMmPerSec": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "upCalls": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "car",
+        "mode",
+        "doors",
+        "positionMm",
+        "speedMmPerSec",
+        "upCalls",
+        "downCalls",
+        "modelTimeMs"
+      ]
+    },
+    "CommandResult": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "status": {
+          "$ref": "#/$defs/CommandStatus"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "status"
+      ]
+    },
+    "CommandStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "applied",
+            "expired",
+            "unknown"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "rejected": {
+              "$ref": "#/$defs/Rejection"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "rejected"
+          ]
+        }
+      ]
+    },
+    "Direction": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down"
+      ]
+    },
+    "DoorState": {
+      "type": "string",
+      "enum": [
+        "closed",
+        "opening",
+        "open",
+        "closing"
+      ]
+    },
+    "Event": {
+      "type": "object",
+      "properties": {
+        "atMs": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0
+        },
+        "car": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/EventKind"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "atMs",
+        "kind",
+        "id"
+      ]
+    },
+    "EventKind": {
+      "type": "string",
+      "enum": [
+        "assigned",
+        "arrived",
+        "served",
+        "requeued",
+        "cancelled",
+        "alarmRaised",
+        "alarmAcked",
+        "alarmCleared"
+      ]
+    },
+    "EventLogChunk": {
+      "type": "object",
+      "properties": {
+        "droppedBefore": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Event"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxItems": 8,
+          "minItems": 8
+        },
+        "firstIndex": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "firstIndex",
+        "droppedBefore",
+        "events"
+      ]
+    },
+    "Hello": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "resetReason": {
+          "$ref": "#/$defs/ResetReason"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "deviceId",
+        "resetReason"
+      ]
+    },
+    "InjectFault": {
+      "type": "object",
+      "properties": {
+        "car": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "car"
+      ]
+    },
+    "Message": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "hello": {
+              "$ref": "#/$defs/Hello"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "hello"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "carSnapshot": {
+              "$ref": "#/$defs/CarSnapshot"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "carSnapshot"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "callFloor": {
+              "$ref": "#/$defs/CallFloor"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "callFloor"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "commandResult": {
+              "$ref": "#/$defs/CommandResult"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "commandResult"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "alarmPage": {
+              "$ref": "#/$defs/AlarmPage"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "alarmPage"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ackAlarm": {
+              "$ref": "#/$defs/AckAlarm"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ackAlarm"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "injectFault": {
+              "$ref": "#/$defs/InjectFault"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "injectFault"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "recoverCar": {
+              "$ref": "#/$defs/RecoverCar"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "recoverCar"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "simControl": {
+              "$ref": "#/$defs/SimControl"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "simControl"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "eventLogChunk": {
+              "$ref": "#/$defs/EventLogChunk"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "eventLogChunk"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "readLog": {
+              "$ref": "#/$defs/ReadLog"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "readLog"
+          ]
+        }
+      ]
+    },
+    "ReadLog": {
+      "type": "object",
+      "properties": {
+        "fromIndex": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "fromIndex"
+      ]
+    },
+    "RecoverCar": {
+      "type": "object",
+      "properties": {
+        "car": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "car"
+      ]
+    },
+    "Rejection": {
+      "type": "string",
+      "enum": [
+        "noSuchFloor",
+        "downFromFirst",
+        "upFromTop",
+        "wrongBoot",
+        "wrongRun",
+        "noSuchAlarm",
+        "noSuchCar",
+        "wrongState"
+      ]
+    },
+    "ResetReason": {
+      "type": "string",
+      "enum": [
+        "powerOn",
+        "button",
+        "watchdog",
+        "software",
+        "brownout"
+      ]
+    },
+    "SimAction": {
+      "type": "string",
+      "enum": [
+        "pause",
+        "resume",
+        "reset"
+      ]
+    },
+    "SimControl": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/SimAction"
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "action"
+      ]
+    }
+  }
+}
