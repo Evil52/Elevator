@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub const PROTOCOL_VERSION: u8 = 1;
 pub const JSON_SAFE_MAX: u64 = (1 << 53) - 1;
 pub const ALARMS_PER_PAGE: usize = 8;
+pub const EVENTS_PER_CHUNK: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageError {
@@ -161,6 +162,40 @@ pub struct SimControl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EventKind {
+    Assigned,
+    Arrived,
+    Served,
+    Requeued,
+    Cancelled,
+    AlarmRaised,
+    AlarmAcked,
+    AlarmCleared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Event {
+    pub index: u32,
+    pub at_ms: u64,
+    pub kind: EventKind,
+    pub car: Option<u8>,
+    pub id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventLogChunk {
+    pub first_index: u32,
+    pub dropped_before: u32,
+    pub events: [Option<Event>; EVENTS_PER_CHUNK],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadLog {
+    pub request_id: u32,
+    pub from_index: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Message {
     Hello(Hello),
     CarSnapshot(CarSnapshot),
@@ -171,6 +206,8 @@ pub enum Message {
     InjectFault(InjectFault),
     RecoverCar(RecoverCar),
     SimControl(SimControl),
+    EventLogChunk(EventLogChunk),
+    ReadLog(ReadLog),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +240,11 @@ fn validate(envelope: &Envelope) -> Result<(), MessageError> {
             .iter()
             .flatten()
             .all(|alarm| alarm.raised_at_ms <= JSON_SAFE_MAX),
+        Message::EventLogChunk(chunk) => chunk
+            .events
+            .iter()
+            .flatten()
+            .all(|event| event.at_ms <= JSON_SAFE_MAX),
         _ => true,
     };
     if in_range {
