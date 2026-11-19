@@ -15,6 +15,8 @@ pub enum MessageError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum ResetReason {
     PowerOn,
     Button,
@@ -24,6 +26,8 @@ pub enum ResetReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum CarMode {
     Normal,
     FireRecall,
@@ -32,6 +36,8 @@ pub enum CarMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum DoorState {
     Closed,
     Opening,
@@ -40,12 +46,16 @@ pub enum DoorState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum Direction {
     Up,
     Down,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum Rejection {
     NoSuchFloor,
     DownFromFirst,
@@ -58,6 +68,8 @@ pub enum Rejection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum CommandStatus {
     Accepted,
     Applied,
@@ -67,12 +79,18 @@ pub enum CommandStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct Hello {
     pub device_id: u32,
     pub reset_reason: ResetReason,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct CarSnapshot {
     pub car: u8,
     pub mode: CarMode,
@@ -83,10 +101,14 @@ pub struct CarSnapshot {
     pub eta_ms: Option<u32>,
     pub up_calls: u32,
     pub down_calls: u32,
+    #[cfg_attr(feature = "schema", schemars(range(max = JSON_SAFE_MAX)))]
     pub model_time_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct CallFloor {
     pub request_id: u32,
     pub floor: u8,
@@ -94,12 +116,17 @@ pub struct CallFloor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct CommandResult {
     pub request_id: u32,
     pub status: CommandStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum AlarmKind {
     FireRecall,
     CarFault,
@@ -108,6 +135,8 @@ pub enum AlarmKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum AlarmState {
     Active,
     Acknowledged,
@@ -115,15 +144,22 @@ pub enum AlarmState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct Alarm {
     pub id: u32,
     pub kind: AlarmKind,
     pub car: Option<u8>,
     pub state: AlarmState,
+    #[cfg_attr(feature = "schema", schemars(range(max = JSON_SAFE_MAX)))]
     pub raised_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct AlarmPage {
     pub total: u16,
     pub offset: u16,
@@ -131,24 +167,35 @@ pub struct AlarmPage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct AckAlarm {
     pub request_id: u32,
     pub alarm_id: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct InjectFault {
     pub request_id: u32,
     pub car: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct RecoverCar {
     pub request_id: u32,
     pub car: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum SimAction {
     Pause,
     Resume,
@@ -156,12 +203,17 @@ pub enum SimAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct SimControl {
     pub request_id: u32,
     pub action: SimAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum EventKind {
     Assigned,
     Arrived,
@@ -174,8 +226,12 @@ pub enum EventKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct Event {
     pub index: u32,
+    #[cfg_attr(feature = "schema", schemars(range(max = JSON_SAFE_MAX)))]
     pub at_ms: u64,
     pub kind: EventKind,
     pub car: Option<u8>,
@@ -183,6 +239,9 @@ pub struct Event {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct EventLogChunk {
     pub first_index: u32,
     pub dropped_before: u32,
@@ -190,12 +249,17 @@ pub struct EventLogChunk {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct ReadLog {
     pub request_id: u32,
     pub from_index: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum Message {
     Hello(Hello),
     CarSnapshot(CarSnapshot),
@@ -211,6 +275,9 @@ pub enum Message {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct Envelope {
     pub version: u8,
     pub boot_id: u32,
@@ -220,6 +287,31 @@ pub struct Envelope {
 }
 
 impl Envelope {
+    pub fn validate(&self) -> Result<(), MessageError> {
+        if self.version != PROTOCOL_VERSION {
+            return Err(MessageError::BadVersion(self.version));
+        }
+        let in_range = match &self.message {
+            Message::CarSnapshot(snapshot) => snapshot.model_time_ms <= JSON_SAFE_MAX,
+            Message::AlarmPage(page) => page
+                .items
+                .iter()
+                .flatten()
+                .all(|alarm| alarm.raised_at_ms <= JSON_SAFE_MAX),
+            Message::EventLogChunk(chunk) => chunk
+                .events
+                .iter()
+                .flatten()
+                .all(|event| event.at_ms <= JSON_SAFE_MAX),
+            _ => true,
+        };
+        if in_range {
+            Ok(())
+        } else {
+            Err(MessageError::OutOfRange)
+        }
+    }
+
     #[must_use]
     pub fn new(boot_id: u32, run_id: u32, seq: u32, message: Message) -> Self {
         Self {
@@ -232,30 +324,8 @@ impl Envelope {
     }
 }
 
-fn validate(envelope: &Envelope) -> Result<(), MessageError> {
-    let in_range = match &envelope.message {
-        Message::CarSnapshot(snapshot) => snapshot.model_time_ms <= JSON_SAFE_MAX,
-        Message::AlarmPage(page) => page
-            .items
-            .iter()
-            .flatten()
-            .all(|alarm| alarm.raised_at_ms <= JSON_SAFE_MAX),
-        Message::EventLogChunk(chunk) => chunk
-            .events
-            .iter()
-            .flatten()
-            .all(|event| event.at_ms <= JSON_SAFE_MAX),
-        _ => true,
-    };
-    if in_range {
-        Ok(())
-    } else {
-        Err(MessageError::OutOfRange)
-    }
-}
-
 pub fn encode_message(envelope: &Envelope, out: &mut [u8]) -> Result<usize, MessageError> {
-    validate(envelope)?;
+    envelope.validate()?;
     postcard::to_slice(envelope, out)
         .map(|written| written.len())
         .map_err(|error| match error {
@@ -274,6 +344,6 @@ pub fn decode_message(bytes: &[u8]) -> Result<Envelope, MessageError> {
     if !rest.is_empty() {
         return Err(MessageError::TrailingBytes);
     }
-    validate(&envelope)?;
+    envelope.validate()?;
     Ok(envelope)
 }

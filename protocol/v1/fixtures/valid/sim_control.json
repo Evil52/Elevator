@@ -1,0 +1,12 @@
+{
+  "bootId": 1,
+  "message": {
+    "simControl": {
+      "action": "reset",
+      "requestId": 12
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

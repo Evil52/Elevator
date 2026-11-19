@@ -1,0 +1,12 @@
+{
+  "bootId": 1,
+  "message": {
+    "ackAlarm": {
+      "alarmId": 300,
+      "requestId": 9
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

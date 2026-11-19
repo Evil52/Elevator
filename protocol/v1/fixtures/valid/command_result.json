@@ -1,0 +1,14 @@
+{
+  "bootId": 1,
+  "message": {
+    "commandResult": {
+      "requestId": 300,
+      "status": {
+        "rejected": "upFromTop"
+      }
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}
