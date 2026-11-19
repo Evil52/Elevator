@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u8 = 1;
 pub const JSON_SAFE_MAX: u64 = (1 << 53) - 1;
+pub const ALARMS_PER_PAGE: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageError {
@@ -50,6 +51,9 @@ pub enum Rejection {
     UpFromTop,
     WrongBoot,
     WrongRun,
+    NoSuchAlarm,
+    NoSuchCar,
+    WrongState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,11 +99,78 @@ pub struct CommandResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AlarmKind {
+    FireRecall,
+    CarFault,
+    LinkLost,
+    LogOverflow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AlarmState {
+    Active,
+    Acknowledged,
+    Cleared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Alarm {
+    pub id: u32,
+    pub kind: AlarmKind,
+    pub car: Option<u8>,
+    pub state: AlarmState,
+    pub raised_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlarmPage {
+    pub total: u16,
+    pub offset: u16,
+    pub items: [Option<Alarm>; ALARMS_PER_PAGE],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AckAlarm {
+    pub request_id: u32,
+    pub alarm_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InjectFault {
+    pub request_id: u32,
+    pub car: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoverCar {
+    pub request_id: u32,
+    pub car: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SimAction {
+    Pause,
+    Resume,
+    Reset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimControl {
+    pub request_id: u32,
+    pub action: SimAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Message {
     Hello(Hello),
     CarSnapshot(CarSnapshot),
     CallFloor(CallFloor),
     CommandResult(CommandResult),
+    AlarmPage(AlarmPage),
+    AckAlarm(AckAlarm),
+    InjectFault(InjectFault),
+    RecoverCar(RecoverCar),
+    SimControl(SimControl),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,12 +196,20 @@ impl Envelope {
 }
 
 fn validate(envelope: &Envelope) -> Result<(), MessageError> {
-    if let Message::CarSnapshot(snapshot) = &envelope.message
-        && snapshot.model_time_ms > JSON_SAFE_MAX
-    {
-        return Err(MessageError::OutOfRange);
+    let in_range = match &envelope.message {
+        Message::CarSnapshot(snapshot) => snapshot.model_time_ms <= JSON_SAFE_MAX,
+        Message::AlarmPage(page) => page
+            .items
+            .iter()
+            .flatten()
+            .all(|alarm| alarm.raised_at_ms <= JSON_SAFE_MAX),
+        _ => true,
+    };
+    if in_range {
+        Ok(())
+    } else {
+        Err(MessageError::OutOfRange)
     }
-    Ok(())
 }
 
 pub fn encode_message(envelope: &Envelope, out: &mut [u8]) -> Result<usize, MessageError> {

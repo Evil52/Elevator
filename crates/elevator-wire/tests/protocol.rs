@@ -1,7 +1,8 @@
 use elevator_wire::protocol::{
-    CallFloor, CarMode, CarSnapshot, CommandResult, CommandStatus, Direction, DoorState, Envelope,
-    Hello, JSON_SAFE_MAX, Message, MessageError, Rejection, ResetReason, decode_message,
-    encode_message,
+    ALARMS_PER_PAGE, AckAlarm, Alarm, AlarmKind, AlarmPage, AlarmState, CallFloor, CarMode,
+    CarSnapshot, CommandResult, CommandStatus, Direction, DoorState, Envelope, Hello, InjectFault,
+    JSON_SAFE_MAX, Message, MessageError, RecoverCar, Rejection, ResetReason, SimAction,
+    SimControl, decode_message, encode_message,
 };
 use elevator_wire::{Decoder, MAX_FRAME, MAX_PAYLOAD, decode_frame, encode_frame};
 
@@ -284,4 +285,224 @@ fn a_frame_body_decodes_without_the_streaming_decoder() {
     let mut payload = [0u8; MAX_PAYLOAD];
     let (_, len) = decode_frame(&wire[..n - 1], &mut payload).unwrap();
     assert_eq!(decode_message(&payload[..len]), Ok(envelope));
+}
+
+fn alarm(id: u32, kind: AlarmKind, car: Option<u8>, state: AlarmState, raised_at_ms: u64) -> Alarm {
+    Alarm {
+        id,
+        kind,
+        car,
+        state,
+        raised_at_ms,
+    }
+}
+
+fn page_of(total: u16, offset: u16, alarms: &[Alarm]) -> Envelope {
+    let mut items = [None; ALARMS_PER_PAGE];
+    for (slot, alarm) in items.iter_mut().zip(alarms) {
+        *slot = Some(*alarm);
+    }
+    Envelope::new(
+        0,
+        0,
+        0,
+        Message::AlarmPage(AlarmPage {
+            total,
+            offset,
+            items,
+        }),
+    )
+}
+
+fn two_alarm_page() -> Envelope {
+    page_of(
+        2,
+        0,
+        &[
+            alarm(1, AlarmKind::FireRecall, None, AlarmState::Active, 1000),
+            alarm(2, AlarmKind::CarFault, Some(1), AlarmState::Acknowledged, 5),
+        ],
+    )
+}
+
+fn ack_alarm() -> Envelope {
+    Envelope::new(
+        1,
+        2,
+        3,
+        Message::AckAlarm(AckAlarm {
+            request_id: 9,
+            alarm_id: 300,
+        }),
+    )
+}
+
+fn commands() -> Vec<Envelope> {
+    vec![
+        ack_alarm(),
+        Envelope::new(
+            4,
+            5,
+            6,
+            Message::InjectFault(InjectFault {
+                request_id: u32::MAX,
+                car: 0,
+            }),
+        ),
+        Envelope::new(
+            4,
+            5,
+            6,
+            Message::RecoverCar(RecoverCar {
+                request_id: 1,
+                car: u8::MAX,
+            }),
+        ),
+        Envelope::new(
+            4,
+            5,
+            6,
+            Message::SimControl(SimControl {
+                request_id: 2,
+                action: SimAction::Reset,
+            }),
+        ),
+    ]
+}
+
+fn full_page_at_the_limits() -> Envelope {
+    let alarms = [alarm(
+        u32::MAX,
+        AlarmKind::LogOverflow,
+        Some(u8::MAX),
+        AlarmState::Cleared,
+        JSON_SAFE_MAX,
+    ); ALARMS_PER_PAGE];
+    page_of(u16::MAX, u16::MAX, &alarms)
+}
+
+fn page_with_time_in_slot(slot: usize, raised_at_ms: u64) -> Envelope {
+    let mut envelope = two_alarm_page();
+    if let Message::AlarmPage(page) = &mut envelope.message {
+        page.items[slot] = Some(alarm(
+            9,
+            AlarmKind::LinkLost,
+            None,
+            AlarmState::Active,
+            raised_at_ms,
+        ));
+    }
+    envelope
+}
+
+#[test]
+fn alarm_pages_round_trip() {
+    let empty = page_of(0, 0, &[]);
+    let full = page_of(
+        u16::try_from(ALARMS_PER_PAGE).unwrap(),
+        0,
+        &[alarm(7, AlarmKind::LinkLost, Some(3), AlarmState::Cleared, 42); ALARMS_PER_PAGE],
+    );
+    for envelope in [empty, two_alarm_page(), full, full_page_at_the_limits()] {
+        let bytes = encoded(&envelope);
+        assert_ne!(bytes.len(), 0, "nothing encoded for {envelope:?}");
+        assert_eq!(decode_message(&bytes), Ok(envelope));
+    }
+}
+
+#[test]
+fn a_full_alarm_page_at_the_limits_fits_one_frame() {
+    let bytes = encoded(&full_page_at_the_limits());
+    assert!(bytes.len() <= MAX_PAYLOAD, "{} bytes", bytes.len());
+}
+
+#[test]
+fn the_new_commands_round_trip() {
+    for envelope in commands() {
+        let bytes = encoded(&envelope);
+        assert_ne!(bytes.len(), 0, "nothing encoded for {envelope:?}");
+        assert_eq!(decode_message(&bytes), Ok(envelope));
+    }
+}
+
+#[test]
+fn ack_alarm_has_known_bytes() {
+    let expected = [0x01, 0x01, 0x02, 0x03, 0x05, 0x09, 0xAC, 0x02];
+    assert_eq!(encoded(&ack_alarm()), expected);
+    assert_eq!(decode_message(&expected), Ok(ack_alarm()));
+}
+
+#[test]
+fn alarm_page_has_known_bytes() {
+    let expected = [
+        0x01, 0x00, 0x00, 0x00, 0x04, 0x02, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0xE8, 0x07, 0x01,
+        0x02, 0x01, 0x01, 0x01, 0x01, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    assert_eq!(encoded(&two_alarm_page()), expected);
+    assert_eq!(decode_message(&expected), Ok(two_alarm_page()));
+}
+
+#[test]
+fn an_unknown_alarm_kind_is_malformed() {
+    let mut bytes = encoded(&two_alarm_page());
+    assert_ne!(bytes.len(), 0, "nothing encoded");
+    bytes[9] = 0x09;
+    assert_eq!(decode_message(&bytes), Err(MessageError::Malformed));
+}
+
+#[test]
+fn an_unknown_sim_action_is_malformed() {
+    assert_eq!(
+        decode_message(&[0x01, 0x00, 0x00, 0x00, 0x08, 0x02, 0x07]),
+        Err(MessageError::Malformed)
+    );
+}
+
+#[test]
+fn the_new_rejections_round_trip() {
+    for rejection in [
+        Rejection::NoSuchAlarm,
+        Rejection::NoSuchCar,
+        Rejection::WrongState,
+    ] {
+        let envelope = Envelope::new(
+            0,
+            0,
+            0,
+            Message::CommandResult(CommandResult {
+                request_id: 1,
+                status: CommandStatus::Rejected(rejection),
+            }),
+        );
+        let bytes = encoded(&envelope);
+        assert_ne!(bytes.len(), 0, "nothing encoded for {envelope:?}");
+        assert_eq!(decode_message(&bytes), Ok(envelope));
+    }
+}
+
+#[test]
+fn an_alarm_time_at_the_json_limit_round_trips() {
+    let envelope = page_with_time_in_slot(7, JSON_SAFE_MAX);
+    let bytes = encoded(&envelope);
+    assert_ne!(bytes.len(), 0, "nothing encoded");
+    assert_eq!(decode_message(&bytes), Ok(envelope));
+}
+
+#[test]
+fn an_alarm_time_over_the_json_limit_is_rejected_in_any_slot() {
+    for slot in 0..ALARMS_PER_PAGE {
+        let envelope = page_with_time_in_slot(slot, JSON_SAFE_MAX + 1);
+        let mut buf = [0u8; MAX_PAYLOAD];
+        assert_eq!(
+            encode_message(&envelope, &mut buf),
+            Err(MessageError::OutOfRange),
+            "encode, slot {slot}"
+        );
+        let raw = postcard::to_slice(&envelope, &mut buf).unwrap();
+        assert_eq!(
+            decode_message(raw),
+            Err(MessageError::OutOfRange),
+            "decode, slot {slot}"
+        );
+    }
 }
