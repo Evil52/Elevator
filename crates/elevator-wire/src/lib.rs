@@ -210,6 +210,8 @@ impl Default for Decoder {
     }
 }
 
+pub mod protocol;
+
 #[cfg(test)]
 mod tests {
     use super::*;
