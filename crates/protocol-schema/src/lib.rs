@@ -52,8 +52,6 @@ static VALIDATOR: LazyLock<Result<jsonschema::Validator, String>> = LazyLock::ne
     jsonschema::validator_for(envelope_schema().as_value()).map_err(|e| e.to_string())
 });
 
-// После проверки схемы все числовые поля — целые в точном диапазоне JSON.
-// Serde для целочисленных полей требует одинакового представления 5, 5.0 и 5e0.
 #[allow(clippy::cast_possible_truncation)]
 fn normalize_integers(value: &mut Value) {
     match value {

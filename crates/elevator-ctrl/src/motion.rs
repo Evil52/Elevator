@@ -160,8 +160,6 @@ fn ceil_sqrt_ratio(num: u128, den: u128) -> u128 {
     ceil_sqrt(num.div_ceil(den))
 }
 
-/// Модель аварийного торможения с постоянным замедлением по модулю.
-/// Время остановки округлено вверх до целой миллисекунды.
 #[derive(Clone, Copy, Debug)]
 pub struct EmergencyStop {
     speed_mm_s: u32,
@@ -185,7 +183,6 @@ impl EmergencyStop {
         self.duration_ms
     }
 
-    /// Путь в мм и модуль скорости в мм/с. Ноль скорости означает полную остановку.
     #[must_use]
     pub fn sample(self, elapsed_ms: u64) -> (u64, u32) {
         let total = u128::from(self.duration_ms);

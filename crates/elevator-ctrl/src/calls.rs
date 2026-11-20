@@ -4,7 +4,6 @@ pub type CarId = u8;
 
 pub type CallId = u32;
 
-/// Метка назначения. Кабина возвращает её вместе с событиями прибытия и открытия дверей.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Assignment {
     pub call: Call,
@@ -26,7 +25,6 @@ pub struct CallRecord {
     pub state: CallState,
     pub registered_ms: u64,
     pub car: Option<CarId>,
-    /// Номер назначения в пределах одного вызова.
     pub attempt: u32,
 }
 
@@ -41,7 +39,6 @@ pub enum Rejection {
     NoSuchFloor,
     DownFromFirst,
     UpFromTop,
-    /// Все идентификаторы вызовов этого запуска использованы.
     IdExhausted,
 }
 
@@ -49,9 +46,7 @@ pub enum Rejection {
 pub enum TransitionError {
     UnknownCall,
     WrongState,
-    /// Событие относится к прежнему назначению.
     StaleAssignment,
-    /// Номера назначений этого вызова исчерпаны.
     AttemptsExhausted,
 }
 
@@ -79,7 +74,6 @@ impl<const FLOORS: usize> CallTable<FLOORS> {
         }
     }
 
-    /// Недопустимая кнопка или исчерпаны идентификаторы вызовов.
     pub fn press(&mut self, call: Call, now_ms: u64) -> Result<Press, Rejection> {
         let index = Self::check(call)?;
         let slot = match call.direction {
@@ -106,7 +100,6 @@ impl<const FLOORS: usize> CallTable<FLOORS> {
         self.slot(call).copied().flatten()
     }
 
-    /// Вызова нет, он не в QUEUED или исчерпаны номера его назначений.
     pub fn assign(&mut self, call: Call, car: CarId) -> Result<Assignment, TransitionError> {
         let record = self.record_in_state(call, CallState::Queued)?;
         record.attempt = record
@@ -144,7 +137,6 @@ impl<const FLOORS: usize> CallTable<FLOORS> {
         Ok((slot, record))
     }
 
-    /// Кабина встала на этаже своего текущего назначения.
     pub fn arrived(&mut self, assignment: Assignment) -> Result<(), TransitionError> {
         let (slot, record) = self.assigned_slot(assignment, CallState::Assigned)?;
         *slot = Some(CallRecord {
@@ -154,7 +146,6 @@ impl<const FLOORS: usize> CallTable<FLOORS> {
         Ok(())
     }
 
-    /// Двери полностью открылись. Убирает из таблицы обслуженный вызов.
     pub fn doors_opened(&mut self, assignment: Assignment) -> Result<Served, TransitionError> {
         let (slot, record) = self.assigned_slot(assignment, CallState::Arrived)?;
         *slot = None;

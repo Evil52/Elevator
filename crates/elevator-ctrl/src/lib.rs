@@ -9,7 +9,6 @@ use core::ops::{Index, IndexMut};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
-    /// Стоимость назначения в мс, включая поправку на ожидание из `build_matrix`.
     pub eta_ms: u64,
     pub allowed: bool,
 }
@@ -48,9 +47,6 @@ pub fn assign<const CARS: usize, const CALLS: usize>(
     result
 }
 
-// Венгерский алгоритм сравнивает стоимости лексикографически. Дорогой ETA
-// не может перевесить лишнюю допустимую пару. Последнее поле кодирует порядок
-// назначения по кабинам в системе счисления с основанием CALLS + 1.
 #[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
 struct Cost {
     missed: i64,
@@ -163,7 +159,6 @@ fn solve<const CARS: usize, const CALLS: usize>(
                         eta: i128::from(c.eta_ms),
                         order: (column - 1) as i128 * weight,
                     },
-                    // Свободная заглушка всегда дешевле запрещённой пары.
                     _ => Cost {
                         missed: if cell.is_some() { 2 } else { 1 },
                         eta: 0,

@@ -4,7 +4,6 @@ import type { Envelope } from './protocol.ts'
 
 export * from './protocol.ts'
 
-// Числовые границы заданы minimum/maximum. Имена форматов указывают тип Rust.
 const ajv = new Ajv2020({
   formats: { uint8: true, uint16: true, uint32: true, int32: true, uint64: true },
 })

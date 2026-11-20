@@ -9,7 +9,6 @@ pub struct CarInput {
     pub state: CarState,
     pub stopped_at: Option<u8>,
     pub doors_open: bool,
-    /// Назначения, подтверждаемые кабиной на этой остановке (до двух направлений).
     pub confirmations: [Option<Assignment>; 2],
 }
 
@@ -61,7 +60,6 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
         self.step_with_plan(now_ms, cars, on_event, |_, _, _| {});
     }
 
-    /// Передаёт наблюдателю ту же матрицу и решение, из которых выдаются назначения.
     pub fn step_with_plan(
         &mut self,
         now_ms: u64,

@@ -290,8 +290,6 @@ pub struct Envelope {
 }
 
 impl AlarmPage {
-    // Заполненные слоты образуют префикс. Короткая страница допустима,
-    // пока она продвигает курсор и укладывается в объявленный размер реестра.
     fn validate(&self) -> Result<(), MessageError> {
         let count = self.items.iter().take_while(|item| item.is_some()).count();
         let remaining = self

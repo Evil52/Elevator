@@ -83,7 +83,6 @@ fn step<const C: usize, const K: usize>(
     cars: &[CarInput; C],
 ) -> Vec<Event> {
     let mut events = Vec::new();
-    // The simulated cars acknowledge both current assignments for this stop.
     let cars = std::array::from_fn(|i| {
         let mut car = cars[i];
         if let Some(floor) = car.stopped_at {

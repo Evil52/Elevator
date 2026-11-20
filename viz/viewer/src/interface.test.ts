@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { expect, it, vi } from 'vitest'
 import html from '../index.html?raw'
 import raw from '../../recordings/b1/timeline.json'
