@@ -1,5 +1,7 @@
 use crate::assign;
-use crate::calls::{CallId, CallRecord, CallState, CallTable, CarId, Press, Rejection, Served};
+use crate::calls::{
+    Assignment, CallId, CallRecord, CallState, CallTable, CarId, Press, Rejection, Served,
+};
 use crate::eta::{Call, CarMode, CarState, Direction, EtaParams, QueuedCall, build_matrix};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7,11 +9,13 @@ pub struct CarInput {
     pub state: CarState,
     pub stopped_at: Option<u8>,
     pub doors_open: bool,
+    /// Назначения, подтверждаемые кабиной на этой остановке (до двух направлений).
+    pub confirmations: [Option<Assignment>; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    Assigned { call: Call, id: CallId, car: CarId },
+    Assigned(Assignment),
     Arrived { call: Call, id: CallId, car: CarId },
     Served { call: Call, served: Served },
     Requeued { call: Call, id: CallId, car: CarId },
@@ -133,21 +137,20 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
                 continue;
             };
             let id = car_id(index);
-            for direction in [Direction::Up, Direction::Down] {
-                let call = Call { floor, direction };
-                let Some(record) = self.table.get(call).filter(|record| record.car == Some(id))
-                else {
+            for ticket in car.confirmations.into_iter().flatten() {
+                let call = ticket.call;
+                if ticket.car != id || call.floor != floor {
                     continue;
-                };
-                if record.state == CallState::Assigned && self.table.arrived(call).is_ok() {
+                }
+                if self.table.arrived(ticket).is_ok() {
                     on_event(Event::Arrived {
                         call,
-                        id: record.id,
+                        id: ticket.id,
                         car: id,
                     });
                 }
                 if car.doors_open
-                    && let Ok(served) = self.table.doors_opened(call)
+                    && let Ok(served) = self.table.doors_opened(ticket)
                 {
                     on_event(Event::Served { call, served });
                 }
@@ -209,14 +212,8 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
                 continue;
             };
             let car = car_id(index);
-            if self.table.assign(call, car).is_ok()
-                && let Some(record) = self.table.get(call)
-            {
-                on_event(Event::Assigned {
-                    call,
-                    id: record.id,
-                    car,
-                });
+            if let Ok(ticket) = self.table.assign(call, car) {
+                on_event(Event::Assigned(ticket));
             }
         }
     }

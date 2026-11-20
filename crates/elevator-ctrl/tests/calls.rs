@@ -1,5 +1,5 @@
 use elevator_ctrl::calls::{
-    CallRecord, CallState, CallTable, Press, Rejection, Served, TransitionError,
+    Assignment, CallRecord, CallState, CallTable, Press, Rejection, Served, TransitionError,
 };
 use elevator_ctrl::eta::{Call, Direction};
 
@@ -27,6 +27,16 @@ fn queued_calls(table: &Table) -> Vec<Call> {
     out[..count].to_vec()
 }
 
+fn current_assignment(table: &Table, call: Call) -> Assignment {
+    let record = table.get(call);
+    Assignment {
+        call,
+        id: record.map_or(0, |r| r.id),
+        car: record.and_then(|r| r.car).unwrap_or(0),
+        attempt: record.map_or(0, |r| r.attempt),
+    }
+}
+
 #[test]
 fn a_new_table_is_empty() {
     let table = Table::new();
@@ -46,6 +56,7 @@ fn a_press_creates_a_queued_call_with_the_press_time() {
             state: CallState::Queued,
             registered_ms: 1000,
             car: None,
+            attempt: 0,
         })
     );
 }
@@ -73,12 +84,12 @@ fn pressing_the_same_button_again_does_not_create_a_second_call() {
 fn pressing_again_while_assigned_or_arrived_changes_nothing() {
     let mut table = Table::new();
     table.press(up(3), 100).expect("создан");
-    table.assign(up(3), 1).expect("назначен");
+    let ticket = table.assign(up(3), 1).expect("назначен");
     let assigned = table.get(up(3));
     assert_eq!(table.press(up(3), 900), Ok(Press::Duplicate(0)));
     assert_eq!(table.get(up(3)), assigned);
 
-    table.arrived(up(3)).expect("приехала");
+    table.arrived(ticket).expect("приехала");
     let arrived = table.get(up(3));
     assert_eq!(table.press(up(3), 950), Ok(Press::Duplicate(0)));
     assert_eq!(table.get(up(3)), arrived);
@@ -109,7 +120,7 @@ fn a_call_goes_through_all_the_states_to_served() {
     let mut table = Table::new();
     table.press(up(3), 1000).expect("создан");
 
-    table.assign(up(3), 2).expect("назначен");
+    let ticket = table.assign(up(3), 2).expect("назначен");
     assert_eq!(
         table.get(up(3)),
         Some(CallRecord {
@@ -117,15 +128,16 @@ fn a_call_goes_through_all_the_states_to_served() {
             state: CallState::Assigned,
             registered_ms: 1000,
             car: Some(2),
+            attempt: 1,
         })
     );
 
-    table.arrived(up(3)).expect("приехала");
+    table.arrived(ticket).expect("приехала");
     assert_eq!(table.get(up(3)).map(|r| r.state), Some(CallState::Arrived));
     assert_eq!(table.get(up(3)).and_then(|r| r.car), Some(2));
 
     assert_eq!(
-        table.doors_opened(up(3)),
+        table.doors_opened(ticket),
         Ok(Served {
             id: 0,
             car: 2,
@@ -139,9 +151,9 @@ fn a_call_goes_through_all_the_states_to_served() {
 fn after_served_the_same_button_makes_a_brand_new_call() {
     let mut table = Table::new();
     table.press(up(3), 1000).expect("создан");
-    table.assign(up(3), 0).expect("назначен");
-    table.arrived(up(3)).expect("приехала");
-    table.doors_opened(up(3)).expect("обслужен");
+    let ticket = table.assign(up(3), 0).expect("назначен");
+    table.arrived(ticket).expect("приехала");
+    table.doors_opened(ticket).expect("обслужен");
 
     assert_eq!(table.press(up(3), 9000), Ok(Press::Created(1)));
     assert_eq!(
@@ -151,6 +163,7 @@ fn after_served_the_same_button_makes_a_brand_new_call() {
             state: CallState::Queued,
             registered_ms: 9000,
             car: None,
+            attempt: 0,
         })
     );
 }
@@ -161,20 +174,26 @@ fn transitions_out_of_order_are_refused_and_change_nothing() {
     table.press(up(3), 100).expect("создан");
     let queued = table.get(up(3));
 
-    assert_eq!(table.arrived(up(3)), Err(TransitionError::WrongState));
-    assert_eq!(table.doors_opened(up(3)), Err(TransitionError::WrongState));
+    assert_eq!(
+        table.arrived(current_assignment(&table, up(3))),
+        Err(TransitionError::WrongState)
+    );
+    assert_eq!(
+        table.doors_opened(current_assignment(&table, up(3))),
+        Err(TransitionError::WrongState)
+    );
     assert_eq!(table.get(up(3)), queued);
 
-    table.assign(up(3), 0).expect("назначен");
+    let ticket = table.assign(up(3), 0).expect("назначен");
     let assigned = table.get(up(3));
     assert_eq!(table.assign(up(3), 1), Err(TransitionError::WrongState));
-    assert_eq!(table.doors_opened(up(3)), Err(TransitionError::WrongState));
+    assert_eq!(table.doors_opened(ticket), Err(TransitionError::WrongState));
     assert_eq!(table.get(up(3)), assigned);
 
-    table.arrived(up(3)).expect("приехала");
+    table.arrived(ticket).expect("приехала");
     let arrived = table.get(up(3));
     assert_eq!(table.assign(up(3), 1), Err(TransitionError::WrongState));
-    assert_eq!(table.arrived(up(3)), Err(TransitionError::WrongState));
+    assert_eq!(table.arrived(ticket), Err(TransitionError::WrongState));
     assert_eq!(table.get(up(3)), arrived);
 }
 
@@ -182,12 +201,21 @@ fn transitions_out_of_order_are_refused_and_change_nothing() {
 fn transitions_on_a_call_that_is_not_there_are_unknown() {
     let mut table = Table::new();
     assert_eq!(table.assign(up(3), 0), Err(TransitionError::UnknownCall));
-    assert_eq!(table.arrived(up(3)), Err(TransitionError::UnknownCall));
-    assert_eq!(table.doors_opened(up(3)), Err(TransitionError::UnknownCall));
-    assert_eq!(table.assign(up(0), 0), Err(TransitionError::UnknownCall));
-    assert_eq!(table.arrived(down(200)), Err(TransitionError::UnknownCall));
     assert_eq!(
-        table.doors_opened(up(FLOORS + 1)),
+        table.arrived(current_assignment(&table, up(3))),
+        Err(TransitionError::UnknownCall)
+    );
+    assert_eq!(
+        table.doors_opened(current_assignment(&table, up(3))),
+        Err(TransitionError::UnknownCall)
+    );
+    assert_eq!(table.assign(up(0), 0), Err(TransitionError::UnknownCall));
+    assert_eq!(
+        table.arrived(current_assignment(&table, down(200))),
+        Err(TransitionError::UnknownCall)
+    );
+    assert_eq!(
+        table.doors_opened(current_assignment(&table, up(FLOORS + 1))),
         Err(TransitionError::UnknownCall)
     );
     assert_eq!(table.get(up(0)), None);
@@ -211,6 +239,7 @@ fn a_lost_car_returns_its_calls_to_the_queue_with_the_original_time() {
             state: CallState::Queued,
             registered_ms: 1000,
             car: None,
+            attempt: 1,
         })
     );
     assert_eq!(table.get(down(3)), other_car);
@@ -220,8 +249,8 @@ fn a_lost_car_returns_its_calls_to_the_queue_with_the_original_time() {
 fn a_lost_car_also_returns_the_call_it_has_already_arrived_at() {
     let mut table = Table::new();
     table.press(up(8), 1000).expect("создан");
-    table.assign(up(8), 0).expect("назначен");
-    table.arrived(up(8)).expect("приехала");
+    let ticket = table.assign(up(8), 0).expect("назначен");
+    table.arrived(ticket).expect("приехала");
     assert_eq!(table.car_lost(0), 1);
     assert_eq!(table.get(up(8)).map(|r| r.state), Some(CallState::Queued));
     assert_eq!(table.get(up(8)).map(|r| r.registered_ms), Some(1000));
@@ -231,9 +260,9 @@ fn a_lost_car_also_returns_the_call_it_has_already_arrived_at() {
 fn a_served_call_is_not_returned_by_a_later_failure() {
     let mut table = Table::new();
     table.press(up(8), 1000).expect("создан");
-    table.assign(up(8), 0).expect("назначен");
-    table.arrived(up(8)).expect("приехала");
-    table.doors_opened(up(8)).expect("обслужен");
+    let ticket = table.assign(up(8), 0).expect("назначен");
+    table.arrived(ticket).expect("приехала");
+    table.doors_opened(ticket).expect("обслужен");
     assert_eq!(table.car_lost(0), 0);
     assert_eq!(table.get(up(8)), None);
     assert_eq!(queued_calls(&table), Vec::new());
@@ -275,8 +304,8 @@ fn only_queued_calls_are_listed() {
     table.press(up(3), 2).expect("создан");
     table.press(up(4), 3).expect("создан");
     table.assign(up(2), 0).expect("назначен");
-    table.assign(up(3), 1).expect("назначен");
-    table.arrived(up(3)).expect("приехала");
+    let ticket = table.assign(up(3), 1).expect("назначен");
+    table.arrived(ticket).expect("приехала");
     assert_eq!(queued_calls(&table), vec![up(4)]);
 }
 
@@ -300,8 +329,8 @@ fn fire_mode_cancels_every_call_and_numbers_keep_growing() {
     table.press(up(3), 2).expect("создан");
     table.press(up(4), 3).expect("создан");
     table.assign(up(3), 0).expect("назначен");
-    table.assign(up(4), 1).expect("назначен");
-    table.arrived(up(4)).expect("приехала");
+    let ticket = table.assign(up(4), 1).expect("назначен");
+    table.arrived(ticket).expect("приехала");
 
     assert_eq!(table.cancel_all(), 3);
     assert_eq!(table.get(up(2)), None);
@@ -375,6 +404,7 @@ impl Model {
                 state: CallState::Queued,
                 registered_ms: now,
                 car: None,
+                attempt: 0,
             },
         });
         Ok(Press::Created(id))
@@ -395,6 +425,7 @@ impl Model {
         record.state = to;
         if car.is_some() {
             record.car = car;
+            record.attempt += 1;
         }
         Ok(index)
     }
@@ -476,21 +507,21 @@ fn random_operations_agree_with_the_model() {
                     "{context}"
                 ),
                 8..=10 => assert_eq!(
-                    table.assign(target, car),
+                    table.assign(target, car).map(|_| ()),
                     model
                         .step(target, CallState::Queued, CallState::Assigned, Some(car))
                         .map(|_| ()),
                     "{context}"
                 ),
                 11..=13 => assert_eq!(
-                    table.arrived(target),
+                    table.arrived(current_assignment(&table, target)),
                     model
                         .step(target, CallState::Assigned, CallState::Arrived, None)
                         .map(|_| ()),
                     "{context}"
                 ),
                 14..=16 => assert_eq!(
-                    table.doors_opened(target),
+                    table.doors_opened(current_assignment(&table, target)),
                     model.doors_opened(target),
                     "{context}"
                 ),
@@ -511,4 +542,34 @@ fn random_operations_agree_with_the_model() {
             assert_eq!(queued_calls(&table), model.queued(), "{context}");
         }
     }
+}
+
+#[test]
+fn stale_callbacks_cannot_serve_a_reassigned_or_recreated_call() {
+    let mut table = Table::new();
+    let call = up(5);
+    table.press(call, 100).unwrap();
+    let first = table.assign(call, 0).unwrap();
+    table.car_lost(0);
+    let replacement = table.assign(call, 1).unwrap();
+    assert_eq!(table.arrived(first), Err(TransitionError::StaleAssignment));
+    table.arrived(replacement).unwrap();
+    assert_eq!(
+        table.doors_opened(first),
+        Err(TransitionError::StaleAssignment)
+    );
+    table.car_lost(1);
+    let retry = table.assign(call, 0).unwrap();
+    assert_eq!(table.arrived(first), Err(TransitionError::StaleAssignment));
+    table.arrived(retry).unwrap();
+    assert_eq!(table.doors_opened(retry).unwrap().registered_ms, 100);
+    table.press(call, 200).unwrap();
+    let new_call = table.assign(call, 0).unwrap();
+    assert_eq!(table.arrived(first), Err(TransitionError::StaleAssignment));
+    table.arrived(new_call).unwrap();
+    assert_eq!(
+        table.doors_opened(first),
+        Err(TransitionError::StaleAssignment)
+    );
+    assert_eq!(table.doors_opened(new_call).unwrap().registered_ms, 200);
 }

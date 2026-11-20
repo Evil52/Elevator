@@ -391,7 +391,10 @@ pub fn build_matrix<const CARS: usize, const CALLS: usize>(
                 Some(eta) => {
                     let cap = params.aging_cap_ms;
                     let aging = cap - queued.waited_ms.min(cap);
-                    Cell::allowed(eta.saturating_add(aging))
+                    Cell {
+                        allowed: true,
+                        eta_ms: u64::from(eta) + u64::from(aging),
+                    }
                 }
                 None => Cell::forbidden(0),
             }

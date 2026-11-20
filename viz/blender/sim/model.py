@@ -1,3 +1,4 @@
+"""Генератор демонстрационной записи Elevator с примерной кинематикой и ETA."""
 import itertools
 import json
 from math import isqrt
@@ -157,9 +158,10 @@ def scenario():
         return passage(car, dest, ride["t1Ms"])
 
     event(0, "START")
-    door("C", 10, 0, ready - door_time, 1000, 1000)
-    door("C", 10, ready - door_time, ready, 1000, 0)
-    event(ready - door_time, "DOOR_CLOSING", car="C", floor=10)
+    standby_floor = CONFIG["initialFloors"]["C"]
+    door("C", standby_floor, 0, ready - door_time, 1000, 1000)
+    door("C", standby_floor, ready - door_time, ready, 1000, 0)
+    event(ready - door_time, "DOOR_CLOSING", car="C", floor=standby_floor)
     for c in calls:
         transition(0, c, "QUEUED")
     cars = {car: dict(position=p, speed=0, wait_ms=ready if car == "C" else 0) for car, p in initial.items()}
@@ -171,7 +173,7 @@ def scenario():
     healthy, failed = (assignments[c["id"]] for c in calls)
     lower, upper = calls
     lower_done = finish_trip(healthy, lower, initial[healthy], 0)
-    run = travel(failed, upper["floor"], initial[failed], 0)
+    run = make_motion(failed, initial[failed], height(upper["floor"]), 0)
     lo, hi = 0, run["t1Ms"]
     while lo < hi:
         mid = (lo + hi) // 2
@@ -191,13 +193,16 @@ def scenario():
                          dxMm=at - run["fromMm"] - phase["xMm"])
         completed.append(phase)
         elapsed -= phase["dtMs"]
-    run.update(t1Ms=fault, toMm=at, profile=completed)
+    if completed:
+        run.update(t1Ms=fault, toMm=at, profile=completed)
+        motions.append(run)
+        event(run["t0Ms"], "DEPART", car=failed, floor=upper["floor"])
     event(fault, "ALARM", car=failed, code="B1", reason="LANDING_LOCK_LOST")
     stop_time = ceil_div(abs(velocity) * 1000, CONFIG["emergencyDecelMmPerSec2"])
-    stop = at + rounded(velocity * stop_time, 2000)
-    brake = motion_from_parts(failed, at, stop, fault, [(stop_time, abs(velocity), 0)])
-    motions.append(brake)
-    event(brake["t1Ms"], "LOCKED", car=failed)
+    if velocity:
+        stop = at + rounded(velocity * stop_time, 2000)
+        motions.append(motion_from_parts(failed, at, stop, fault, [(stop_time, abs(velocity), 0)]))
+    event(fault + stop_time, "LOCKED", car=failed)
     transition(fault, upper, "QUEUED", kind="REQUEUE")
     live_motion = next(m for m in motions if m["car"] == healthy)
     cars[failed]["locked"] = True

@@ -1,0 +1,27 @@
+{
+  "name": "@elevator/protocol-v1",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "generate": "json2ts -i ../schema.json -o src/protocol.ts --bannerComment \"\" --no-additionalProperties",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "json-schema-to-typescript": "15.0.4",
+    "typescript": "5.9.3",
+    "vite": "6.4.6",
+    "vitest": "4.1.12"
+  }
+}

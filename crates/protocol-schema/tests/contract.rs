@@ -151,3 +151,21 @@ fn every_invalid_fixture_is_rejected() {
         }
     }
 }
+
+#[test]
+fn integer_bounds_and_object_shape_agree_across_validators() {
+    let validator = jsonschema::validator_for(&schema_value()).unwrap();
+    let mut value = valid_fixtures()
+        .into_iter()
+        .find(|(n, _)| n == "call_floor")
+        .unwrap()
+        .1;
+    value["message"]["callFloor"]["floor"] = serde_json::from_str("5e0").unwrap();
+    assert!(validator.is_valid(&value));
+    assert!(validate_json(&value).is_ok());
+    value["seq"] = Value::from(u64::from(u32::MAX) + 1);
+    assert!(!validator.is_valid(&value));
+    value["seq"] = Value::from(0);
+    value["message"]["callFloor"] = serde_json::json!([7, 5, "down"]);
+    assert!(validate_json(&value).is_err());
+}

@@ -379,11 +379,15 @@ fn full_page_at_the_limits() -> Envelope {
         AlarmState::Cleared,
         JSON_SAFE_MAX,
     ); ALARMS_PER_PAGE];
-    page_of(u16::MAX, u16::MAX, &alarms)
+    page_of(
+        u16::MAX,
+        u16::MAX - u16::try_from(alarms.len()).unwrap(),
+        &alarms,
+    )
 }
 
 fn page_with_time_in_slot(slot: usize, raised_at_ms: u64) -> Envelope {
-    let mut envelope = two_alarm_page();
+    let mut envelope = full_page_at_the_limits();
     if let Message::AlarmPage(page) = &mut envelope.message {
         page.items[slot] = Some(alarm(
             9,
@@ -559,27 +563,30 @@ fn read_log() -> Envelope {
 }
 
 fn full_chunk_at_the_limits() -> Envelope {
-    let events = [event(
-        u32::MAX,
-        JSON_SAFE_MAX,
-        EventKind::AlarmCleared,
-        Some(u8::MAX),
-        u32::MAX,
-    ); EVENTS_PER_CHUNK];
-    chunk_of(u32::MAX, u32::MAX, &events)
+    let first = u32::MAX - u32::try_from(EVENTS_PER_CHUNK - 1).unwrap();
+    let events: [_; EVENTS_PER_CHUNK] = core::array::from_fn(|i| {
+        event(
+            first + u32::try_from(i).unwrap(),
+            JSON_SAFE_MAX,
+            EventKind::AlarmCleared,
+            Some(u8::MAX),
+            u32::MAX,
+        )
+    });
+    chunk_of(first, first, &events)
 }
 
 fn chunk_with_time_in_slot(slot: usize, at_ms: u64) -> Envelope {
-    let mut envelope = two_event_chunk();
+    let mut envelope = full_chunk_at_the_limits();
     if let Message::EventLogChunk(chunk) = &mut envelope.message {
-        chunk.events[slot] = Some(event(99, at_ms, EventKind::Requeued, None, 1));
+        chunk.events[slot].as_mut().unwrap().at_ms = at_ms;
     }
     envelope
 }
 
 #[test]
 fn event_log_chunks_round_trip() {
-    let all_kinds = [
+    let kinds = [
         EventKind::Assigned,
         EventKind::Arrived,
         EventKind::Served,
@@ -588,8 +595,9 @@ fn event_log_chunks_round_trip() {
         EventKind::AlarmRaised,
         EventKind::AlarmAcked,
         EventKind::AlarmCleared,
-    ]
-    .map(|kind| event(5, 6, kind, Some(1), 2));
+    ];
+    let all_kinds: [_; EVENTS_PER_CHUNK] =
+        core::array::from_fn(|i| event(5 + u32::try_from(i).unwrap(), 6, kinds[i], Some(1), 2));
     for envelope in [
         chunk_of(0, 0, &[]),
         two_event_chunk(),
@@ -659,5 +667,23 @@ fn an_event_time_over_the_json_limit_is_rejected_in_any_slot() {
             Err(MessageError::OutOfRange),
             "decode, slot {slot}"
         );
+    }
+}
+
+#[test]
+fn inconsistent_page_and_chunk_headers_fail_in_both_directions() {
+    let mut page = two_alarm_page();
+    if let Message::AlarmPage(ref mut p) = page.message {
+        p.total = 0;
+    }
+    let mut chunk = two_event_chunk();
+    if let Message::EventLogChunk(ref mut c) = chunk.message {
+        c.first_index += 1;
+    }
+    for bad in [page, chunk] {
+        let mut buffer = [0; MAX_PAYLOAD];
+        assert!(encode_message(&bad, &mut buffer).is_err());
+        let bytes = postcard::to_slice(&bad, &mut buffer).unwrap();
+        assert!(decode_message(bytes).is_err());
     }
 }

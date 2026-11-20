@@ -1,0 +1,28 @@
+{
+  "bootId": 1,
+  "message": {
+    "alarmPage": {
+      "items": [
+        null,
+        {
+          "car": 1,
+          "id": 2,
+          "kind": "carFault",
+          "raisedAtMs": 5,
+          "state": "acknowledged"
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "offset": 0,
+      "total": 2
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

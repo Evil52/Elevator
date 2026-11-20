@@ -9,7 +9,8 @@ use core::ops::{Index, IndexMut};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
-    pub eta_ms: u32,
+    /// Стоимость назначения в мс, включая поправку на ожидание из `build_matrix`.
+    pub eta_ms: u64,
     pub allowed: bool,
 }
 
@@ -17,7 +18,7 @@ impl Cell {
     #[must_use]
     pub const fn allowed(eta_ms: u32) -> Self {
         Self {
-            eta_ms,
+            eta_ms: eta_ms as u64,
             allowed: true,
         }
     }
@@ -25,7 +26,7 @@ impl Cell {
     #[must_use]
     pub const fn forbidden(eta_ms: u32) -> Self {
         Self {
-            eta_ms,
+            eta_ms: eta_ms as u64,
             allowed: false,
         }
     }
@@ -35,8 +36,7 @@ impl Cell {
 pub fn assign<const CARS: usize, const CALLS: usize>(
     matrix: &[[Cell; CALLS]; CARS],
 ) -> [Option<usize>; CARS] {
-    let weights = Weights::new(CARS, CALLS);
-    let matched = solve(matrix, &weights);
+    let matched = solve(matrix);
 
     let mut result = [None; CARS];
     for column in 1..=CALLS {
@@ -48,52 +48,36 @@ pub fn assign<const CARS: usize, const CALLS: usize>(
     result
 }
 
-struct Weights {
-    base: i128,
-    scale: i128,
-    bonus: i128,
-    cars: usize,
-    calls: usize,
+// Венгерский алгоритм сравнивает стоимости лексикографически. Дорогой ETA
+// не может перевесить лишнюю допустимую пару. Последнее поле кодирует порядок
+// назначения по кабинам в системе счисления с основанием CALLS + 1.
+#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+struct Cost {
+    missed: i64,
+    eta: i128,
+    order: i128,
 }
 
-impl Weights {
-    fn new(cars: usize, calls: usize) -> Self {
-        let base = wide(calls) + 1;
-        let scale = pow(base, cars);
-        let bonus = (wide(cars) * i128::from(u32::MAX) + 1) * scale;
+impl core::ops::Add for Cost {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
         Self {
-            base,
-            scale,
-            bonus,
-            cars,
-            calls,
-        }
-    }
-
-    fn cost(&self, cell: Option<Cell>, car: usize, column: usize) -> i128 {
-        let digit_weight = pow(self.base, self.cars - 1 - car);
-        match cell {
-            Some(cell) if cell.allowed => {
-                i128::from(cell.eta_ms) * self.scale + wide(column) * digit_weight - self.bonus
-            }
-            Some(_) => self.bonus,
-            None => wide(self.calls) * digit_weight,
+            missed: self.missed + rhs.missed,
+            eta: self.eta + rhs.eta,
+            order: self.order + rhs.order,
         }
     }
 }
 
-const fn wide(n: usize) -> i128 {
-    n as i128
-}
-
-const fn pow(base: i128, exp: usize) -> i128 {
-    let mut result = 1;
-    let mut left = exp;
-    while left > 0 {
-        result *= base;
-        left -= 1;
+impl core::ops::Sub for Cost {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            missed: self.missed - rhs.missed,
+            eta: self.eta - rhs.eta,
+            order: self.order - rhs.order,
+        }
     }
-    result
 }
 
 struct Slots<T, const A: usize, const B: usize> {
@@ -140,33 +124,53 @@ impl<T, const A: usize, const B: usize> IndexMut<usize> for Slots<T, A, B> {
 
 fn solve<const CARS: usize, const CALLS: usize>(
     matrix: &[[Cell; CALLS]; CARS],
-    weights: &Weights,
 ) -> Slots<usize, CALLS, CARS> {
     let columns = CALLS + CARS;
-    let mut row_potential = Slots::<i128, CARS, 0>::filled(0);
-    let mut column_potential = Slots::<i128, CALLS, CARS>::filled(0);
+    let zero = Cost::default();
+    let infinity = Cost {
+        missed: i64::MAX,
+        ..zero
+    };
+    let mut digit_weights = [1_i128; CARS];
+    for i in (1..CARS).rev() {
+        digit_weights[i - 1] = digit_weights[i] * (CALLS as i128 + 1);
+    }
+    let mut row_potential = Slots::<Cost, CARS, 0>::filled(zero);
+    let mut column_potential = Slots::<Cost, CALLS, CARS>::filled(zero);
     let mut matched = Slots::<usize, CALLS, CARS>::filled(0);
     let mut way = Slots::<usize, CALLS, CARS>::filled(0);
 
     for row in 1..=CARS {
         matched[0] = row;
         let mut current = 0;
-        let mut slack = Slots::<i128, CALLS, CARS>::filled(i128::MAX);
+        let mut slack = Slots::<Cost, CALLS, CARS>::filled(infinity);
         let mut visited = Slots::<bool, CALLS, CARS>::filled(false);
 
         loop {
             visited[current] = true;
             let owner = matched[current];
-            let mut delta = i128::MAX;
+            let mut delta = infinity;
             let mut next = 0;
             for column in 1..=columns {
                 if visited[column] {
                     continue;
                 }
                 let cell = (column <= CALLS).then(|| matrix[owner - 1][column - 1]);
-                let cost = weights.cost(cell, owner - 1, column - 1)
-                    - row_potential[owner]
-                    - column_potential[column];
+                let weight = digit_weights[owner - 1];
+                let edge = match cell {
+                    Some(c) if c.allowed => Cost {
+                        missed: 0,
+                        eta: i128::from(c.eta_ms),
+                        order: (column - 1) as i128 * weight,
+                    },
+                    // Свободная заглушка всегда дешевле запрещённой пары.
+                    _ => Cost {
+                        missed: if cell.is_some() { 2 } else { 1 },
+                        eta: 0,
+                        order: CALLS as i128 * weight,
+                    },
+                };
+                let cost = edge - row_potential[owner] - column_potential[column];
                 if cost < slack[column] {
                     slack[column] = cost;
                     way[column] = current;
@@ -176,12 +180,13 @@ fn solve<const CARS: usize, const CALLS: usize>(
                     next = column;
                 }
             }
-            for column in 0..=columns {
+            row_potential[row] = row_potential[row] + delta;
+            for column in 1..=columns {
                 if visited[column] {
-                    row_potential[matched[column]] += delta;
-                    column_potential[column] -= delta;
+                    row_potential[matched[column]] = row_potential[matched[column]] + delta;
+                    column_potential[column] = column_potential[column] - delta;
                 } else {
-                    slack[column] -= delta;
+                    slack[column] = slack[column] - delta;
                 }
             }
             current = next;

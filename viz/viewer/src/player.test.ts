@@ -67,3 +67,35 @@ describe('проигрыватель', () => {
     ).toThrow()
   })
 })
+
+it('проверяет непрерывность, длительность и путь профиля', () => {
+  for (const fault of ['empty', 'duration', 'offset', 'distance']) {
+    const changed = structuredClone(raw)
+    const m = changed.motions[0]
+    if (fault === 'empty') m.profile = []
+    if (fault === 'duration') m.profile[0].dtMs++
+    if (fault === 'offset') m.profile[1].xMm++
+    if (fault === 'distance') m.toMm++
+    expect(() => parseTimeline(changed)).toThrow()
+  }
+})
+
+it('проверяет сумму и уникальность назначений в обоих планах', () => {
+  for (const name of ['optimal', 'greedy'] as const) {
+    for (const fault of ['total', 'car', 'column']) {
+      const changed = structuredClone(raw)
+      const dispatch = changed.events.find((e) => e.type === 'DISPATCH')!
+      const plan = dispatch[name]!
+      const pair = { ...plan.pairs[0] }
+      if (fault === 'total') plan.totalEtaMs++
+      else {
+        if (fault === 'column') pair.car = plan.pairs[1].car
+        else pair.column = plan.pairs[1].column
+        pair.etaMs = dispatch.matrix![dispatch.rows!.indexOf(pair.car)][pair.column]!
+        plan.pairs = [plan.pairs[0], pair]
+        plan.totalEtaMs = plan.pairs.reduce((sum, p) => sum + p.etaMs, 0)
+      }
+      expect(() => parseTimeline(changed)).toThrow()
+    }
+  }
+})

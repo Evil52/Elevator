@@ -70,8 +70,43 @@ function car(v: unknown): v is Car {
 function floor(v: unknown) {
   return integer(v) && v >= 1 && v <= 10
 }
-function span(v: Record<string, unknown>, max: number) {
+function span(
+  v: Record<string, unknown>,
+  max: number,
+): v is Record<string, unknown> & { t0Ms: number; t1Ms: number } {
   return integer(v.t0Ms) && integer(v.t1Ms) && v.t0Ms >= 0 && v.t1Ms >= v.t0Ms && v.t1Ms <= max
+}
+
+function validMotion(m: unknown, durationMs: number): m is Motion {
+  if (
+    !record(m) ||
+    !car(m.car) ||
+    !span(m, durationMs) ||
+    !integer(m.fromMm) ||
+    !integer(m.toMm) ||
+    !Array.isArray(m.profile)
+  )
+    return false
+
+  let time = BigInt(m.t0Ms)
+  let offset = 0n
+  for (const p of m.profile) {
+    if (
+      !record(p) ||
+      !integer(p.dtMs) ||
+      p.dtMs <= 0 ||
+      !integer(p.xMm) ||
+      BigInt(p.xMm) !== offset ||
+      !integer(p.dxMm) ||
+      !integer(p.v0MmPerSec) ||
+      !integer(p.v1MmPerSec) ||
+      (p.v0MmPerSec === 0 && p.v1MmPerSec === 0)
+    )
+      return false
+    time += BigInt(p.dtMs)
+    offset += BigInt(p.dxMm)
+  }
+  return time === BigInt(m.t1Ms) && BigInt(m.fromMm) + offset === BigInt(m.toMm)
 }
 
 export function parseTimeline(data: unknown): Timeline {
@@ -93,31 +128,13 @@ export function parseTimeline(data: unknown): Timeline {
           typeof c.id === 'string' &&
           floor(c.floor) &&
           integer(c.registeredMs) &&
-          ['UP', 'DOWN'].includes(String(c.direction)),
+          (c.direction === 'UP' || c.direction === 'DOWN'),
       ),
     'вызовы',
   )
   const ids = new Set(calls.map((c) => c.id))
-  check(
-    Array.isArray(motions) &&
-      motions.every(
-        (m) =>
-          record(m) &&
-          car(m.car) &&
-          span(m, durationMs) &&
-          integer(m.fromMm) &&
-          integer(m.toMm) &&
-          Array.isArray(m.profile) &&
-          m.profile.every(
-            (p) =>
-              record(p) &&
-              ['dtMs', 'xMm', 'dxMm', 'v0MmPerSec', 'v1MmPerSec'].every((k) => integer(p[k])) &&
-              Number(p.dtMs) > 0 &&
-              Math.abs(Number(p.v0MmPerSec)) + Math.abs(Number(p.v1MmPerSec)) > 0,
-          ),
-      ),
-    'движение',
-  )
+  check(ids.size === calls.length, 'повторный идентификатор вызова')
+  check(Array.isArray(motions) && motions.every((m) => validMotion(m, durationMs)), 'движение')
   check(
     Array.isArray(doors) &&
       doors.every(
@@ -160,6 +177,7 @@ export function parseTimeline(data: unknown): Timeline {
           rows.every((id, i) => id === carIds[i]) &&
           Array.isArray(columns) &&
           columns.every((id) => ids.has(id)) &&
+          new Set(columns).size === columns.length &&
           Array.isArray(matrix) &&
           matrix.length === rows.length &&
           matrix.every(
@@ -181,7 +199,7 @@ export function parseTimeline(data: unknown): Timeline {
           ),
         'допустимость пар',
       )
-      for (const plan of [optimal, greedy])
+      for (const plan of [optimal, greedy]) {
         check(
           record(plan) &&
             integer(plan.totalEtaMs) &&
@@ -197,6 +215,17 @@ export function parseTimeline(data: unknown): Timeline {
             ),
           'назначения',
         )
+        const pairs = plan.pairs
+        check(
+          new Set(pairs.map((p) => p.car)).size === pairs.length &&
+            new Set(pairs.map((p) => p.column)).size === pairs.length,
+          'повторное назначение',
+        )
+        check(
+          pairs.reduce((sum, p) => sum + BigInt(p.etaMs), 0n) === BigInt(plan.totalEtaMs),
+          'сумма ETA',
+        )
+      }
     }
   }
   check(previous === durationMs && ['RESET', 'END'].includes(events.at(-1).type), 'конец')

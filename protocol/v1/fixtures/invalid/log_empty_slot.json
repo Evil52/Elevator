@@ -1,0 +1,28 @@
+{
+  "bootId": 1,
+  "message": {
+    "eventLogChunk": {
+      "droppedBefore": 0,
+      "events": [
+        null,
+        {
+          "atMs": 2000,
+          "car": null,
+          "id": 7,
+          "index": 11,
+          "kind": "served"
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "firstIndex": 10
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

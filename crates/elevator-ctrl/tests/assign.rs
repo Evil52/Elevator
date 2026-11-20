@@ -17,7 +17,7 @@ fn totals<const C: usize, const K: usize>(m: &Matrix<C, K>, picks: &Picks<C>) ->
     for (row, pick) in m.iter().zip(picks) {
         if let Some(call) = pick {
             count += 1;
-            sum += u64::from(row[*call].eta_ms);
+            sum += row[*call].eta_ms;
         }
     }
     (count, sum)
@@ -245,4 +245,9 @@ fn same_input_gives_same_output() {
         [no(0), ok(4), ok(4)],
     ];
     assert_eq!(assign(&m), assign(&m));
+}
+
+#[test]
+fn twenty_equal_rows_use_the_lexicographic_matching() {
+    assert_eq!(assign(&[[ok(0); 20]; 20]), core::array::from_fn(Some));
 }
