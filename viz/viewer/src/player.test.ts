@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import raw from '../../out/timeline.json'
+import rustB1 from '../../recordings/b1/timeline.json'
 import golden from '../../golden.json'
 import { parseTimeline } from './timeline'
 import { stateAt, positionAt, lastEventAt, stepEvent, floorLabel } from './player'
@@ -98,4 +99,22 @@ it('проверяет сумму и уникальность назначени
       expect(() => parseTimeline(changed)).toThrow()
     }
   }
+})
+
+it('Rust SIL возвращает вызов в очередь, пока A ещё тормозит', () => {
+  const b1 = parseTimeline(rustB1)
+  const index = b1.events.findIndex((e) => e.type === 'REQUEUE')
+  const fault = b1.events[index].tMs
+  const locked = b1.events.find((e) => e.type === 'LOCKED')!.tMs
+  expect(stateAt(b1, fault - 1).calls.H08.car).toBe('A')
+  expect(stateAt(b1, fault, index).calls.H08).toMatchObject({ state: 'QUEUED', registeredMs: 0 })
+  expect(stateAt(b1, fault).calls.H08).toMatchObject({ state: 'ASSIGNED', car: 'C', registeredMs: 0 })
+  expect(stateAt(b1, fault).cars.A).toMatchObject({ mode: 'BRAKING', positionMm: 15000, speed: 3000 })
+  expect(stateAt(b1, fault + 500).cars.A).toMatchObject({ positionMm: 16125, speed: 1500 })
+  expect(stateAt(b1, locked - 1).cars.A).toMatchObject({ mode: 'BRAKING', speed: 3 })
+  expect(stateAt(b1, locked).cars.A).toMatchObject({ mode: 'LOCKED', positionMm: 16500, speed: 0 })
+  const served = b1.events.find((e) => e.call === 'H08' && e.state === 'SERVED')!
+  expect(stateAt(b1, served.tMs - 1).calls.H08.state).toBe('ARRIVED')
+  expect(stateAt(b1, served.tMs).cars.C).toMatchObject({ doorFloor: 8, doorPermille: 1000 })
+  expect(stateAt(b1, b1.durationMs).reset).toBe(true)
 })

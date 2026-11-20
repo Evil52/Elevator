@@ -159,3 +159,43 @@ fn ceil_sqrt(n: u128) -> u128 {
 fn ceil_sqrt_ratio(num: u128, den: u128) -> u128 {
     ceil_sqrt(num.div_ceil(den))
 }
+
+/// Модель аварийного торможения с постоянным замедлением по модулю.
+/// Время остановки округлено вверх до целой миллисекунды.
+#[derive(Clone, Copy, Debug)]
+pub struct EmergencyStop {
+    speed_mm_s: u32,
+    duration_ms: u64,
+}
+
+impl EmergencyStop {
+    #[must_use]
+    pub fn new(speed_mm_s: u32, decel_mm_s2: u32) -> Option<Self> {
+        if decel_mm_s2 == 0 {
+            return None;
+        }
+        Some(Self {
+            speed_mm_s,
+            duration_ms: (1000 * u64::from(speed_mm_s)).div_ceil(u64::from(decel_mm_s2)),
+        })
+    }
+
+    #[must_use]
+    pub const fn duration_ms(self) -> u64 {
+        self.duration_ms
+    }
+
+    /// Путь в мм и модуль скорости в мм/с. Ноль скорости означает полную остановку.
+    #[must_use]
+    pub fn sample(self, elapsed_ms: u64) -> (u64, u32) {
+        let total = u128::from(self.duration_ms);
+        if total == 0 {
+            return (0, 0);
+        }
+        let t = u128::from(elapsed_ms.min(self.duration_ms));
+        let v = u128::from(self.speed_mm_s);
+        let distance = (v * t * (2 * total - t) + 1000 * total) / (2000 * total);
+        let speed = (v * (total - t)).div_ceil(total);
+        (u64::try_from(distance).unwrap_or(u64::MAX), saturate(speed))
+    }
+}

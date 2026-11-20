@@ -1,8 +1,8 @@
-use crate::assign;
 use crate::calls::{
     Assignment, CallId, CallRecord, CallState, CallTable, CarId, Press, Rejection, Served,
 };
 use crate::eta::{Call, CarMode, CarState, Direction, EtaParams, QueuedCall, build_matrix};
+use crate::{Cell, assign};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CarInput {
@@ -57,14 +57,25 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
         &self.table
     }
 
-    pub fn step(&mut self, now_ms: u64, cars: &[CarInput; CARS], mut on_event: impl FnMut(Event)) {
+    pub fn step(&mut self, now_ms: u64, cars: &[CarInput; CARS], on_event: impl FnMut(Event)) {
+        self.step_with_plan(now_ms, cars, on_event, |_, _, _| {});
+    }
+
+    /// Передаёт наблюдателю ту же матрицу и решение, из которых выдаются назначения.
+    pub fn step_with_plan(
+        &mut self,
+        now_ms: u64,
+        cars: &[CarInput; CARS],
+        mut on_event: impl FnMut(Event),
+        on_plan: impl FnOnce(&[QueuedCall], &[[Cell; CALLS]; CARS], &[Option<usize>; CARS]),
+    ) {
         if cars.iter().any(|car| car.state.mode == CarMode::FireRecall) {
             self.cancel_everything(&mut on_event);
             return;
         }
         self.requeue_lost_cars(cars, &mut on_event);
         self.register_stops(cars, &mut on_event);
-        self.assign_queued(now_ms, cars, &mut on_event);
+        self.assign_queued(now_ms, cars, &mut on_event, on_plan);
     }
 
     fn all_calls() -> impl Iterator<Item = Call> {
@@ -178,6 +189,7 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
         now_ms: u64,
         cars: &[CarInput; CARS],
         on_event: &mut impl FnMut(Event),
+        on_plan: impl FnOnce(&[QueuedCall], &[[Cell; CALLS]; CARS], &[Option<usize>; CARS]),
     ) {
         let mut queued = [PADDING; CALLS];
         let count = self.table.queued(&mut queued);
@@ -206,7 +218,9 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
                 ..cars[index].state
             }
         });
-        let picks = assign(&build_matrix(&self.params, &states, &window));
+        let matrix = build_matrix(&self.params, &states, &window);
+        let picks = assign(&matrix);
+        on_plan(&window[..count], &matrix, &picks);
         for (index, pick) in picks.iter().enumerate() {
             let Some(&call) = pick.and_then(|column| queued.get(column)) else {
                 continue;

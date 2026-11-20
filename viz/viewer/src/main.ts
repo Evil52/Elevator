@@ -1,5 +1,6 @@
 import './style.css'
 import demoUrl from '../../out/timeline.json?url'
+import b1Url from '../../recordings/b1/timeline.json?url'
 import silUrl from '../../recordings/single-trip/timeline.json?url'
 import { parseTimeline, carIds, type ModelEvent, type Status } from './timeline'
 import { floorLabel, lastEventAt, stateAt, stepEvent, type Snapshot, type Cabin } from './player'
@@ -70,8 +71,15 @@ function explain(title: string, body: string, symbol: string) {
   dialog.showModal()
 }
 async function start() {
-  const singleTrip = new URLSearchParams(location.search).get('scenario') === 'sil'
-  const response = await fetch(singleTrip ? silUrl : demoUrl)
+  const requested = new URLSearchParams(location.search).get('scenario')
+  const scenario = requested === 'sil' || requested === 'b1' ? requested : 'demo'
+  const recordings = {
+    demo: { url: demoUrl, label: 'Демо с отказом B1 · Python', number: '01' },
+    sil: { url: silUrl, label: 'Поездка с 1-го на 4-й этаж · Rust SIL', number: '02 · SIL' },
+    b1: { url: b1Url, label: 'Отказ замка B1 · Rust SIL', number: '03 · SIL' },
+  }
+  const singleTrip = scenario === 'sil'
+  const response = await fetch(recordings[scenario].url)
   if (!response.ok) throw new Error('Не удалось загрузить timeline.json')
   const line = parseTimeline(await response.json())
   const demo = line.source === 'python-demo'
@@ -80,12 +88,12 @@ async function start() {
     ? 'Кабина A едет с 1-го на 4-й этаж. Траекторию и ETA рассчитывает Rust-ядро.'
     : 'Два одновременных вызова, три кабины и аварийное переназначение.'
   const clock = (ms: number) =>
-    singleTrip
+    !demo
       ? shortClock(ms) + ',' + String(Math.floor(ms) % 1000).padStart(3, '0')
       : shortClock(ms)
   el('scenario-title').textContent = title
   el('scenario-summary').textContent = summary
-  el('scenario-number').textContent = singleTrip ? 'СЦЕНАРИЙ 02 · SIL' : 'СЦЕНАРИЙ 01'
+  el('scenario-number').textContent = 'СЦЕНАРИЙ ' + recordings[scenario].number
   el('scenario-info').setAttribute('aria-label', 'Выбор сценария. ' + title)
   el('matrix-source').textContent = demo
     ? 'Демо Python · приближённая ETA'
@@ -114,6 +122,7 @@ async function start() {
       index: singleTrip ? line.events.findIndex((e) => e.state === 'ARRIVED') : -1,
     },
     { name: 'Авария B1', index: alarmIndex },
+    { name: 'Блокировка', index: line.events.findIndex((e) => e.type === 'LOCKED') },
     { name: 'Обслуживание', index: line.events.findIndex((e) => e.state === 'SERVED') },
     { name: 'Диагностика', index: line.events.findIndex((e) => e.type === 'DIAGNOSTICS') },
   ].filter((phase) => phase.index >= 0)
@@ -290,7 +299,7 @@ async function start() {
         (car.speed === 0 ? '' : car.speed > 0 ? '↑ ' : '↓ ') +
         fmt(Math.abs(car.speed) / 1000, 1) +
         ' м/с' +
-        (singleTrip && id === 'A' ? ' · ' + car.positionMm + ' мм' : '')
+        (!demo && id === 'A' ? ' · ' + car.positionMm + ' мм' : '')
     }
     if (index !== lastPanel) {
       el('matrix').innerHTML = matrix(s)
@@ -456,11 +465,11 @@ async function start() {
               '</time></button>',
           )
           .join('') +
-        '</div><a class="switch-recording" href="' +
-        (singleTrip ? '?scenario=demo' : '?scenario=sil') +
-        '">' +
-        (singleTrip ? 'Открыть демо с отказом B1' : 'Открыть поездку Rust SIL') +
-        ' →</a>',
+        '</div>' +
+        Object.entries(recordings)
+          .filter(([id]) => id !== scenario)
+          .map(([id, other]) => '<a class="switch-recording" href="?scenario=' + id + '">' + other.label + ' →</a>')
+          .join(''),
       'route',
     )
   function projection(front: boolean) {

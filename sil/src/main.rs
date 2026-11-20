@@ -1,3 +1,5 @@
+mod b1;
+
 use std::io::{self, Write};
 
 use elevator_ctrl::{
@@ -16,16 +18,17 @@ const FLOOR_HEIGHT_MM: u32 = 3000;
 const OPEN_MS: u32 = 2400;
 const SAMPLE_MS: u32 = 50;
 
-fn profile(trip: &RestTrip) -> Vec<Value> {
+fn profile(trip: &RestTrip, end: u32, sign: i64) -> Vec<Value> {
     let mut phases = Vec::new();
     let mut start = 0;
-    let mut previous = trip.sample(start);
-    let end = trip.duration_ms();
-    for t in (SAMPLE_MS..end).step_by(SAMPLE_MS as usize).chain([end]) {
+    let mut previous = trip.sample(0);
+    let count = end.div_ceil(SAMPLE_MS);
+    for i in 1..=count {
+        let t = u32::try_from(u64::from(i) * u64::from(end) / u64::from(count)).unwrap();
         let next = trip.sample(t);
         phases.push(json!({
-            "dtMs":t-start, "xMm":previous.0, "dxMm":next.0-previous.0,
-            "v0MmPerSec":previous.1, "v1MmPerSec":next.1
+            "dtMs":t-start, "xMm":sign*i64::from(previous.0), "dxMm":sign*i64::from(next.0-previous.0),
+            "v0MmPerSec":sign*i64::from(previous.1), "v1MmPerSec":sign*i64::from(next.1)
         }));
         previous = next;
         start = t;
@@ -39,7 +42,7 @@ fn assignment(matrix: &[[Cell; 1]; 3], car: usize) -> Value {
 }
 
 fn call_event(time: u32, floor: u8, state: &str, registered_ms: u64, car: Option<u8>) -> Value {
-    let mut event = json!({"type":"CALL","tMs":time,"call":"H04","floor":floor,"registeredMs":registered_ms,"state":state});
+    let mut event = json!({"type":"CALL","tMs":time,"call":format!("H{floor:02}"),"floor":floor,"registeredMs":registered_ms,"state":state});
     if let Some(car) = car {
         event["car"] = json!(CAR_IDS[usize::from(car)]);
     }
@@ -55,13 +58,17 @@ fn active_call_event(time: u32, floor: u8, record: CallRecord) -> Value {
     call_event(time, floor, state, record.registered_ms, record.car)
 }
 
-fn trip_recording() -> Value {
-    let params = EtaParams {
+fn params() -> EtaParams {
+    EtaParams {
         building: Building::new(10, FLOOR_HEIGHT_MM).unwrap(),
         motion: MotionParams::new(3000, 1500, 3000).unwrap(),
         doors: DoorTimes::new(OPEN_MS, 5000, 2400).unwrap(),
         aging_cap_ms: 0,
-    };
+    }
+}
+
+fn trip_recording() -> Value {
+    let params = params();
     let a = CarState {
         position_mm: 0,
         speed_mm_s: 0,
@@ -140,14 +147,25 @@ fn trip_recording() -> Value {
             {"type":"SAMPLE_BRAKE","tMs":arrival-half_ramp,"car":car},
             arrived, doors_open, {"type":"END","tMs":served}
         ],
-        "motions":[{"car":car,"t0Ms":0,"t1Ms":arrival,"fromMm":start_mm,"toMm":target_mm,"profile":profile(&trip)}],
+        "motions":[{"car":car,"t0Ms":0,"t1Ms":arrival,"fromMm":start_mm,"toMm":target_mm,"profile":profile(&trip, arrival, 1)}],
         "doors":[{"car":car,"floor":floor,"t0Ms":arrival,"t1Ms":served,"fromPermille":0,"toPermille":1000}]
     })
 }
 
 fn main() -> io::Result<()> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let recording = match args.as_slice() {
+        [] => trip_recording(),
+        [flag, name] if flag == "--scenario" && name == "b1" => b1::recording(),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "usage: elevator-sil [--scenario b1]",
+            ));
+        }
+    };
     let mut out = io::BufWriter::new(io::stdout().lock());
-    serde_json::to_writer_pretty(&mut out, &trip_recording())?;
+    serde_json::to_writer_pretty(&mut out, &recording)?;
     writeln!(out)?;
     out.flush()
 }
