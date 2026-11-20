@@ -6,6 +6,7 @@
     "bootId": {
       "type": "integer",
       "format": "uint32",
+      "maximum": 4294967295,
       "minimum": 0
     },
     "message": {
@@ -14,16 +15,19 @@
     "runId": {
       "type": "integer",
       "format": "uint32",
+      "maximum": 4294967295,
       "minimum": 0
     },
     "seq": {
       "type": "integer",
       "format": "uint32",
+      "maximum": 4294967295,
       "minimum": 0
     },
     "version": {
       "type": "integer",
       "format": "uint8",
+      "const": 1,
       "maximum": 255,
       "minimum": 0
     }
@@ -43,11 +47,13 @@
         "alarmId": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "requestId": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         }
       },
@@ -72,6 +78,7 @@
         "id": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "kind": {
@@ -165,6 +172,7 @@
         "requestId": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         }
       },
@@ -199,6 +207,7 @@
         "downCalls": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "etaMs": {
@@ -207,6 +216,7 @@
             "null"
           ],
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "floor": {
@@ -230,15 +240,19 @@
         "positionMm": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "speedMmPerSec": {
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "maximum": 2147483647,
+          "minimum": -2147483648
         },
         "upCalls": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         }
       },
@@ -260,6 +274,7 @@
         "requestId": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "status": {
@@ -334,11 +349,13 @@
         "id": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "index": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "kind": {
@@ -372,6 +389,7 @@
         "droppedBefore": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "events": {
@@ -392,6 +410,7 @@
         "firstIndex": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         }
       },
@@ -408,6 +427,7 @@
         "deviceId": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "resetReason": {
@@ -432,6 +452,7 @@
         "requestId": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         }
       },
@@ -583,11 +604,13 @@
         "fromIndex": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "requestId": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         }
       },
@@ -609,6 +632,7 @@
         "requestId": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         }
       },
@@ -658,6 +682,7 @@
         "requestId": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         }
       },

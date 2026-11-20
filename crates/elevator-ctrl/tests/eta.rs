@@ -712,3 +712,13 @@ fn impossible_acceleration_gets_no_estimate() {
     };
     assert_eq!(eta(&overshoot, 6, Up), None);
 }
+
+#[test]
+fn full_aging_cap_preserves_car_order_for_the_same_call() {
+    let p = EtaParams {
+        aging_cap_ms: u32::MAX,
+        ..params()
+    };
+    let matrix = build_matrix(&p, &[idle(1, Up), idle(4, Up)], &[queued(5, Down, 0)]);
+    assert_eq!(assign(&matrix), [None, Some(0)]);
+}

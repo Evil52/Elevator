@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from model import (assign, eta, make_motion, position_at, scenario, serialize,
@@ -90,6 +91,18 @@ class DispatchTests(unittest.TestCase):
 
 
 class ScenarioTests(unittest.TestCase):
+    def test_stationary_fault_locks_without_a_braking_phase(self):
+        with patch.dict(CONFIG["initialFloors"], A=6, C=9):
+            line = scenario()
+        alarm = next(e for e in line["events"] if e["type"] == "ALARM")
+        locked = next(e for e in line["events"] if e["type"] == "LOCKED")
+        self.assertEqual((alarm["tMs"], locked["tMs"]), (0, 0))
+        self.assertFalse(any(m["car"] == alarm["car"] for m in line["motions"]))
+        self.assertFalse(any(e["type"] == "DEPART" and e["car"] == alarm["car"] for e in line["events"]))
+        self.assertEqual(position_at(line, alarm["car"], 1000), 15000)
+        self.assertEqual(next(d["floor"] for d in line["doors"] if d["car"] == "C"), 9)
+        self.assertTrue(any(e["type"] == "REQUEUE" for e in line["events"]))
+
     def test_demo_timeline_identifies_its_generator(self):
         line = scenario()
         self.assertEqual(line["source"], "python-demo")

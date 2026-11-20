@@ -11,6 +11,8 @@ pub enum MessageError {
     Malformed,
     TrailingBytes,
     OutOfRange,
+    InconsistentPage,
+    InconsistentLog,
     TooLong,
 }
 
@@ -279,6 +281,7 @@ pub enum Message {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct Envelope {
+    #[cfg_attr(feature = "schema", schemars(extend("const" = PROTOCOL_VERSION)))]
     pub version: u8,
     pub boot_id: u32,
     pub run_id: u32,
@@ -286,29 +289,63 @@ pub struct Envelope {
     pub message: Message,
 }
 
+impl AlarmPage {
+    fn validate(&self) -> Result<(), MessageError> {
+        let count = self.items.iter().take_while(|item| item.is_some()).count();
+        let remaining = self
+            .total
+            .checked_sub(self.offset)
+            .ok_or(MessageError::InconsistentPage)?;
+        if self.items[count..].iter().any(Option::is_some)
+            || count > usize::from(remaining)
+            || (count == 0 && remaining != 0)
+        {
+            return Err(MessageError::InconsistentPage);
+        }
+        if self
+            .items
+            .iter()
+            .flatten()
+            .any(|alarm| alarm.raised_at_ms > JSON_SAFE_MAX)
+        {
+            return Err(MessageError::OutOfRange);
+        }
+        Ok(())
+    }
+}
+
+impl EventLogChunk {
+    fn validate(&self) -> Result<(), MessageError> {
+        let mut expected = Some(self.first_index);
+        for item in &self.events {
+            if let Some(event) = item {
+                if Some(event.index) != expected {
+                    return Err(MessageError::InconsistentLog);
+                }
+                if event.at_ms > JSON_SAFE_MAX {
+                    return Err(MessageError::OutOfRange);
+                }
+                expected = event.index.checked_add(1);
+            } else {
+                expected = None;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Envelope {
     pub fn validate(&self) -> Result<(), MessageError> {
         if self.version != PROTOCOL_VERSION {
             return Err(MessageError::BadVersion(self.version));
         }
-        let in_range = match &self.message {
-            Message::CarSnapshot(snapshot) => snapshot.model_time_ms <= JSON_SAFE_MAX,
-            Message::AlarmPage(page) => page
-                .items
-                .iter()
-                .flatten()
-                .all(|alarm| alarm.raised_at_ms <= JSON_SAFE_MAX),
-            Message::EventLogChunk(chunk) => chunk
-                .events
-                .iter()
-                .flatten()
-                .all(|event| event.at_ms <= JSON_SAFE_MAX),
-            _ => true,
-        };
-        if in_range {
-            Ok(())
-        } else {
-            Err(MessageError::OutOfRange)
+        match &self.message {
+            Message::CarSnapshot(snapshot) if snapshot.model_time_ms > JSON_SAFE_MAX => {
+                Err(MessageError::OutOfRange)
+            }
+            Message::AlarmPage(page) => page.validate(),
+            Message::EventLogChunk(chunk) => chunk.validate(),
+            _ => Ok(()),
         }
     }
 

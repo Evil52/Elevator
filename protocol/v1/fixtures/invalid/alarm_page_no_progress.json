@@ -1,0 +1,22 @@
+{
+  "bootId": 1,
+  "message": {
+    "alarmPage": {
+      "items": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "offset": 0,
+      "total": 1
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

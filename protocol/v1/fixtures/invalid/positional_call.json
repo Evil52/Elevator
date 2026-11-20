@@ -1,0 +1,13 @@
+{
+  "bootId": 1,
+  "message": {
+    "callFloor": [
+      7,
+      5,
+      "down"
+    ]
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

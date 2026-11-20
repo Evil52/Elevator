@@ -252,3 +252,22 @@ fn random_accelerating_cases_stay_close_to_the_ideal_plan() {
         }
     }
 }
+
+#[test]
+fn emergency_brake_reaches_zero_only_at_the_end_and_stays_stopped() {
+    use elevator_ctrl::motion::EmergencyStop;
+    assert!(EmergencyStop::new(1000, 0).is_none());
+    let parked = EmergencyStop::new(0, 3000).unwrap();
+    assert_eq!((parked.duration_ms(), parked.sample(10)), (0, (0, 0)));
+    let brake = EmergencyStop::new(3000, 3000).unwrap();
+    assert_eq!(brake.sample(0), (0, 3000));
+    assert_eq!(brake.sample(500), (1125, 1500));
+    assert_eq!(brake.sample(999).1, 3);
+    assert_eq!(brake.sample(1000), (1500, 0));
+    assert_eq!(brake.sample(u64::MAX), (1500, 0));
+    for (v, decel) in [(1, 3), (u32::MAX, 1), (u32::MAX, u32::MAX)] {
+        let brake = EmergencyStop::new(v, decel).unwrap();
+        assert!(brake.sample(brake.duration_ms() - 1).1 > 0);
+        assert_eq!(brake.sample(brake.duration_ms()).1, 0);
+    }
+}

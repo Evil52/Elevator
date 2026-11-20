@@ -4,21 +4,77 @@ use elevator_wire::protocol::{
     Event, EventKind, EventLogChunk, Hello, InjectFault, JSON_SAFE_MAX, Message, ReadLog,
     RecoverCar, Rejection, ResetReason, SimAction, SimControl,
 };
+use schemars::{
+    Schema,
+    transform::{RecursiveTransform, Transform},
+};
 use serde_json::{Value, json};
+use std::sync::LazyLock;
 
-pub const SEMANTIC_ONLY: [&str; 1] = ["unknown_version"];
+pub const SEMANTIC_ONLY: &[&str] = &[
+    "alarm_page_total",
+    "alarm_page_offset",
+    "alarm_page_gap",
+    "alarm_page_no_progress",
+    "log_first_index",
+    "log_index_gap",
+    "log_empty_slot",
+    "log_index_overflow",
+];
+
+fn envelope_schema() -> Schema {
+    let mut schema = schemars::schema_for!(Envelope);
+    RecursiveTransform(
+        |node: &mut Schema| match node.get("format").and_then(Value::as_str) {
+            Some("uint32") => {
+                node.insert("maximum".into(), u32::MAX.into());
+            }
+            Some("int32") => {
+                node.insert("minimum".into(), i32::MIN.into());
+                node.insert("maximum".into(), i32::MAX.into());
+            }
+            _ => {}
+        },
+    )
+    .transform(&mut schema);
+    schema
+}
 
 #[must_use]
 pub fn schema_json() -> String {
-    let schema = schemars::schema_for!(Envelope);
     format!(
         "{}\n",
-        serde_json::to_string_pretty(&schema).unwrap_or_default()
+        serde_json::to_string_pretty(&envelope_schema()).unwrap_or_default()
     )
 }
 
+static VALIDATOR: LazyLock<Result<jsonschema::Validator, String>> = LazyLock::new(|| {
+    jsonschema::validator_for(envelope_schema().as_value()).map_err(|e| e.to_string())
+});
+
+#[allow(clippy::cast_possible_truncation)]
+fn normalize_integers(value: &mut Value) {
+    match value {
+        Value::Number(n) if n.is_f64() => {
+            if let Some(number) = n.as_f64() {
+                *n = (number as i64).into();
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(normalize_integers),
+        Value::Object(fields) => fields.values_mut().for_each(normalize_integers),
+        _ => {}
+    }
+}
+
 pub fn validate_json(value: &Value) -> Result<Envelope, String> {
-    let envelope: Envelope = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+    VALIDATOR
+        .as_ref()
+        .map_err(Clone::clone)?
+        .validate(value)
+        .map_err(|e| e.to_string())?;
+    let mut normalized = value.clone();
+    normalize_integers(&mut normalized);
+    let envelope: Envelope = serde_json::from_value(normalized).map_err(|e| e.to_string())?;
     envelope.validate().map_err(|e| format!("{e:?}"))?;
     Ok(envelope)
 }
@@ -76,6 +132,36 @@ fn call_floor() -> Message {
 
 fn to_value(envelope: &Envelope) -> Value {
     serde_json::to_value(envelope).unwrap_or(Value::Null)
+}
+
+fn pagination_examples(alarm: Alarm, event: Event) -> [(&'static str, Message); 3] {
+    let mut items = [None; ALARMS_PER_PAGE];
+    items[0] = Some(alarm);
+    [
+        (
+            "alarm_page_partial",
+            Message::AlarmPage(AlarmPage {
+                offset: 2,
+                total: 4,
+                items,
+            }),
+        ),
+        (
+            "alarm_page_at_end",
+            Message::AlarmPage(AlarmPage {
+                offset: 4,
+                total: 4,
+                items: [None; ALARMS_PER_PAGE],
+            }),
+        ),
+        (
+            "log_at_last_index",
+            event_chunk(&[Event {
+                index: u32::MAX,
+                ..event
+            }]),
+        ),
+    ]
 }
 
 #[must_use]
@@ -171,6 +257,7 @@ pub fn valid_fixtures() -> Vec<(String, Value)> {
     ];
     cases
         .into_iter()
+        .chain(pagination_examples(alarms[0], events[0]))
         .map(|(name, message)| (name.to_owned(), to_value(&envelope(message))))
         .collect()
 }
@@ -186,6 +273,62 @@ fn mutated(name: &str, change: impl FnOnce(&mut Value)) -> Value {
     let mut value = base(name);
     change(&mut value);
     value
+}
+
+fn inconsistent_pages() -> [(&'static str, Value); 8] {
+    [
+        (
+            "alarm_page_total",
+            mutated("alarm_page", |v| {
+                v["message"]["alarmPage"]["total"] = json!(0);
+            }),
+        ),
+        (
+            "alarm_page_offset",
+            mutated("alarm_page_empty", |v| {
+                v["message"]["alarmPage"]["offset"] = json!(1);
+            }),
+        ),
+        (
+            "alarm_page_gap",
+            mutated("alarm_page", |v| {
+                v["message"]["alarmPage"]["items"][0] = Value::Null;
+            }),
+        ),
+        (
+            "alarm_page_no_progress",
+            mutated("alarm_page_empty", |v| {
+                v["message"]["alarmPage"]["total"] = json!(1);
+            }),
+        ),
+        (
+            "log_first_index",
+            mutated("event_log_chunk", |v| {
+                v["message"]["eventLogChunk"]["firstIndex"] = json!(12);
+            }),
+        ),
+        (
+            "log_index_gap",
+            mutated("event_log_chunk", |v| {
+                v["message"]["eventLogChunk"]["events"][1]["index"] = json!(12);
+            }),
+        ),
+        (
+            "log_empty_slot",
+            mutated("event_log_chunk", |v| {
+                v["message"]["eventLogChunk"]["events"][0] = Value::Null;
+            }),
+        ),
+        (
+            "log_index_overflow",
+            mutated("event_log_chunk", |v| {
+                let chunk = &mut v["message"]["eventLogChunk"];
+                chunk["firstIndex"] = json!(u32::MAX);
+                chunk["events"][0]["index"] = json!(u32::MAX);
+                chunk["events"][1]["index"] = json!(0);
+            }),
+        ),
+    ]
 }
 
 #[must_use]
@@ -205,6 +348,26 @@ pub fn invalid_fixtures() -> Vec<(String, Value)> {
         (
             "floor_over_u8",
             call(|v| v["message"]["callFloor"]["floor"] = json!(256)),
+        ),
+        (
+            "request_id_over_u32",
+            call(|v| v["message"]["callFloor"]["requestId"] = json!(u64::from(u32::MAX) + 1)),
+        ),
+        (
+            "speed_below_i32",
+            mutated("car_snapshot", |v| {
+                v["message"]["carSnapshot"]["speedMmPerSec"] = json!(i64::from(i32::MIN) - 1);
+            }),
+        ),
+        (
+            "speed_above_i32",
+            mutated("car_snapshot", |v| {
+                v["message"]["carSnapshot"]["speedMmPerSec"] = json!(i64::from(i32::MAX) + 1);
+            }),
+        ),
+        (
+            "positional_call",
+            call(|v| v["message"]["callFloor"] = json!([7, 5, "down"])),
         ),
         ("unknown_version", call(|v| v["version"] = json!(2))),
         (
@@ -261,6 +424,7 @@ pub fn invalid_fixtures() -> Vec<(String, Value)> {
     ];
     cases
         .into_iter()
+        .chain(inconsistent_pages())
         .map(|(name, value)| (name.to_owned(), value))
         .collect()
 }

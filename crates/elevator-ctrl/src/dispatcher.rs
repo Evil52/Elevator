@@ -1,17 +1,20 @@
-use crate::assign;
-use crate::calls::{CallId, CallRecord, CallState, CallTable, CarId, Press, Rejection, Served};
+use crate::calls::{
+    Assignment, CallId, CallRecord, CallState, CallTable, CarId, Press, Rejection, Served,
+};
 use crate::eta::{Call, CarMode, CarState, Direction, EtaParams, QueuedCall, build_matrix};
+use crate::{Cell, assign};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CarInput {
     pub state: CarState,
     pub stopped_at: Option<u8>,
     pub doors_open: bool,
+    pub confirmations: [Option<Assignment>; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    Assigned { call: Call, id: CallId, car: CarId },
+    Assigned(Assignment),
     Arrived { call: Call, id: CallId, car: CarId },
     Served { call: Call, served: Served },
     Requeued { call: Call, id: CallId, car: CarId },
@@ -53,14 +56,24 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
         &self.table
     }
 
-    pub fn step(&mut self, now_ms: u64, cars: &[CarInput; CARS], mut on_event: impl FnMut(Event)) {
+    pub fn step(&mut self, now_ms: u64, cars: &[CarInput; CARS], on_event: impl FnMut(Event)) {
+        self.step_with_plan(now_ms, cars, on_event, |_, _, _| {});
+    }
+
+    pub fn step_with_plan(
+        &mut self,
+        now_ms: u64,
+        cars: &[CarInput; CARS],
+        mut on_event: impl FnMut(Event),
+        on_plan: impl FnOnce(&[QueuedCall], &[[Cell; CALLS]; CARS], &[Option<usize>; CARS]),
+    ) {
         if cars.iter().any(|car| car.state.mode == CarMode::FireRecall) {
             self.cancel_everything(&mut on_event);
             return;
         }
         self.requeue_lost_cars(cars, &mut on_event);
         self.register_stops(cars, &mut on_event);
-        self.assign_queued(now_ms, cars, &mut on_event);
+        self.assign_queued(now_ms, cars, &mut on_event, on_plan);
     }
 
     fn all_calls() -> impl Iterator<Item = Call> {
@@ -133,21 +146,20 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
                 continue;
             };
             let id = car_id(index);
-            for direction in [Direction::Up, Direction::Down] {
-                let call = Call { floor, direction };
-                let Some(record) = self.table.get(call).filter(|record| record.car == Some(id))
-                else {
+            for ticket in car.confirmations.into_iter().flatten() {
+                let call = ticket.call;
+                if ticket.car != id || call.floor != floor {
                     continue;
-                };
-                if record.state == CallState::Assigned && self.table.arrived(call).is_ok() {
+                }
+                if self.table.arrived(ticket).is_ok() {
                     on_event(Event::Arrived {
                         call,
-                        id: record.id,
+                        id: ticket.id,
                         car: id,
                     });
                 }
                 if car.doors_open
-                    && let Ok(served) = self.table.doors_opened(call)
+                    && let Ok(served) = self.table.doors_opened(ticket)
                 {
                     on_event(Event::Served { call, served });
                 }
@@ -175,6 +187,7 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
         now_ms: u64,
         cars: &[CarInput; CARS],
         on_event: &mut impl FnMut(Event),
+        on_plan: impl FnOnce(&[QueuedCall], &[[Cell; CALLS]; CARS], &[Option<usize>; CARS]),
     ) {
         let mut queued = [PADDING; CALLS];
         let count = self.table.queued(&mut queued);
@@ -203,20 +216,16 @@ impl<const FLOORS: usize, const CARS: usize, const CALLS: usize> Dispatcher<FLOO
                 ..cars[index].state
             }
         });
-        let picks = assign(&build_matrix(&self.params, &states, &window));
+        let matrix = build_matrix(&self.params, &states, &window);
+        let picks = assign(&matrix);
+        on_plan(&window[..count], &matrix, &picks);
         for (index, pick) in picks.iter().enumerate() {
             let Some(&call) = pick.and_then(|column| queued.get(column)) else {
                 continue;
             };
             let car = car_id(index);
-            if self.table.assign(call, car).is_ok()
-                && let Some(record) = self.table.get(call)
-            {
-                on_event(Event::Assigned {
-                    call,
-                    id: record.id,
-                    car,
-                });
+            if let Ok(ticket) = self.table.assign(call, car) {
+                on_event(Event::Assigned(ticket));
             }
         }
     }

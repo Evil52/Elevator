@@ -5,6 +5,14 @@ pub type CarId = u8;
 pub type CallId = u32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Assignment {
+    pub call: Call,
+    pub id: CallId,
+    pub car: CarId,
+    pub attempt: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallState {
     Queued,
     Assigned,
@@ -17,6 +25,7 @@ pub struct CallRecord {
     pub state: CallState,
     pub registered_ms: u64,
     pub car: Option<CarId>,
+    pub attempt: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,12 +39,15 @@ pub enum Rejection {
     NoSuchFloor,
     DownFromFirst,
     UpFromTop,
+    IdExhausted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransitionError {
     UnknownCall,
     WrongState,
+    StaleAssignment,
+    AttemptsExhausted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +61,7 @@ pub struct Served {
 pub struct CallTable<const FLOORS: usize> {
     up: [Option<CallRecord>; FLOORS],
     down: [Option<CallRecord>; FLOORS],
-    next_id: CallId,
+    next_id: Option<CallId>,
 }
 
 impl<const FLOORS: usize> CallTable<FLOORS> {
@@ -58,7 +70,7 @@ impl<const FLOORS: usize> CallTable<FLOORS> {
         Self {
             up: [None; FLOORS],
             down: [None; FLOORS],
-            next_id: 0,
+            next_id: Some(0),
         }
     }
 
@@ -71,13 +83,14 @@ impl<const FLOORS: usize> CallTable<FLOORS> {
         if let Some(record) = slot {
             return Ok(Press::Duplicate(record.id));
         }
-        let id = self.next_id;
-        self.next_id = id.wrapping_add(1);
+        let id = self.next_id.ok_or(Rejection::IdExhausted)?;
+        self.next_id = id.checked_add(1);
         *slot = Some(CallRecord {
             id,
             state: CallState::Queued,
             registered_ms: now_ms,
             car: None,
+            attempt: 0,
         });
         Ok(Press::Created(id))
     }
@@ -87,37 +100,60 @@ impl<const FLOORS: usize> CallTable<FLOORS> {
         self.slot(call).copied().flatten()
     }
 
-    pub fn assign(&mut self, call: Call, car: CarId) -> Result<(), TransitionError> {
+    pub fn assign(&mut self, call: Call, car: CarId) -> Result<Assignment, TransitionError> {
         let record = self.record_in_state(call, CallState::Queued)?;
+        record.attempt = record
+            .attempt
+            .checked_add(1)
+            .ok_or(TransitionError::AttemptsExhausted)?;
         record.state = CallState::Assigned;
         record.car = Some(car);
-        Ok(())
+        Ok(Assignment {
+            call,
+            id: record.id,
+            car,
+            attempt: record.attempt,
+        })
     }
 
-    pub fn arrived(&mut self, call: Call) -> Result<(), TransitionError> {
-        self.record_in_state(call, CallState::Assigned)?.state = CallState::Arrived;
-        Ok(())
-    }
-
-    pub fn doors_opened(&mut self, call: Call) -> Result<Served, TransitionError> {
-        let slot = self.slot_mut(call).ok_or(TransitionError::UnknownCall)?;
-        match *slot {
-            None => Err(TransitionError::UnknownCall),
-            Some(CallRecord {
-                id,
-                state: CallState::Arrived,
-                registered_ms,
-                car: Some(car),
-            }) => {
-                *slot = None;
-                Ok(Served {
-                    id,
-                    car,
-                    registered_ms,
-                })
-            }
-            Some(_) => Err(TransitionError::WrongState),
+    fn assigned_slot(
+        &mut self,
+        assignment: Assignment,
+        state: CallState,
+    ) -> Result<(&mut Option<CallRecord>, CallRecord), TransitionError> {
+        let slot = self
+            .slot_mut(assignment.call)
+            .ok_or(TransitionError::UnknownCall)?;
+        let record = slot.ok_or(TransitionError::UnknownCall)?;
+        if record.state != state {
+            return Err(TransitionError::WrongState);
         }
+        if record.id != assignment.id
+            || record.car != Some(assignment.car)
+            || record.attempt != assignment.attempt
+        {
+            return Err(TransitionError::StaleAssignment);
+        }
+        Ok((slot, record))
+    }
+
+    pub fn arrived(&mut self, assignment: Assignment) -> Result<(), TransitionError> {
+        let (slot, record) = self.assigned_slot(assignment, CallState::Assigned)?;
+        *slot = Some(CallRecord {
+            state: CallState::Arrived,
+            ..record
+        });
+        Ok(())
+    }
+
+    pub fn doors_opened(&mut self, assignment: Assignment) -> Result<Served, TransitionError> {
+        let (slot, record) = self.assigned_slot(assignment, CallState::Arrived)?;
+        *slot = None;
+        Ok(Served {
+            id: record.id,
+            car: assignment.car,
+            registered_ms: record.registered_ms,
+        })
     }
 
     pub fn car_lost(&mut self, car: CarId) -> usize {

@@ -1,9 +1,11 @@
 import './style.css'
 import demoUrl from '../../out/timeline.json?url'
+import b1Url from '../../recordings/b1/timeline.json?url'
 import silUrl from '../../recordings/single-trip/timeline.json?url'
-import { parseTimeline, carIds, type ModelEvent, type Status } from './timeline'
-import { floorLabel, lastEventAt, stateAt, stepEvent, type Snapshot, type Cabin } from './player'
+import { parseTimeline, carIds, type ModelEvent } from './timeline'
+import { floorLabel, lastEventAt, stateAt, stepEvent, type Cabin } from './player'
 import { icon, iconsIn } from './icons'
+import { callsPanel, element, matrixPanel, states, type Strategy } from './panels'
 import type { createScene } from './scene'
 
 function el<T extends HTMLElement = HTMLElement>(id: string) {
@@ -24,12 +26,6 @@ const modeNames: Record<Cabin['mode'], string> = {
   CLOSING: 'Закрывает двери',
   BRAKING: 'Аварийное торможение',
   LOCKED: 'Заблокирована',
-}
-const states: Record<Status, string> = {
-  QUEUED: 'В очереди',
-  ASSIGNED: 'Назначен',
-  ARRIVED: 'Прибытие',
-  SERVED: 'Обслужен',
 }
 function description(e: ModelEvent) {
   if (e.type === 'CALL')
@@ -64,14 +60,21 @@ dialog.onclick = (e) => {
       dialog.close()
   }
 }
-function explain(title: string, body: string, symbol: string) {
+function explain(title: string, symbol: string, ...body: Node[]) {
   el('dialog-icon').innerHTML = icon(symbol)
-  el('dialog-content').innerHTML = '<h2>' + title + '</h2>' + body
+  el('dialog-content').replaceChildren(element('h2', '', title), ...body)
   dialog.showModal()
 }
 async function start() {
-  const singleTrip = new URLSearchParams(location.search).get('scenario') === 'sil'
-  const response = await fetch(singleTrip ? silUrl : demoUrl)
+  const requested = new URLSearchParams(location.search).get('scenario')
+  const scenario = requested === 'sil' || requested === 'b1' ? requested : 'demo'
+  const recordings = {
+    demo: { url: demoUrl, label: 'Демо с отказом B1 · Python', number: '01' },
+    sil: { url: silUrl, label: 'Поездка с 1-го на 4-й этаж · Rust SIL', number: '02 · SIL' },
+    b1: { url: b1Url, label: 'Отказ замка B1 · Rust SIL', number: '03 · SIL' },
+  }
+  const singleTrip = scenario === 'sil'
+  const response = await fetch(recordings[scenario].url)
   if (!response.ok) throw new Error('Не удалось загрузить timeline.json')
   const line = parseTimeline(await response.json())
   const demo = line.source === 'python-demo'
@@ -80,12 +83,12 @@ async function start() {
     ? 'Кабина A едет с 1-го на 4-й этаж. Траекторию и ETA рассчитывает Rust-ядро.'
     : 'Два одновременных вызова, три кабины и аварийное переназначение.'
   const clock = (ms: number) =>
-    singleTrip
+    !demo
       ? shortClock(ms) + ',' + String(Math.floor(ms) % 1000).padStart(3, '0')
       : shortClock(ms)
   el('scenario-title').textContent = title
   el('scenario-summary').textContent = summary
-  el('scenario-number').textContent = singleTrip ? 'СЦЕНАРИЙ 02 · SIL' : 'СЦЕНАРИЙ 01'
+  el('scenario-number').textContent = 'СЦЕНАРИЙ ' + recordings[scenario].number
   el('scenario-info').setAttribute('aria-label', 'Выбор сценария. ' + title)
   el('matrix-source').textContent = demo
     ? 'Демо Python · приближённая ETA'
@@ -114,6 +117,7 @@ async function start() {
       index: singleTrip ? line.events.findIndex((e) => e.state === 'ARRIVED') : -1,
     },
     { name: 'Авария B1', index: alarmIndex },
+    { name: 'Блокировка', index: line.events.findIndex((e) => e.type === 'LOCKED') },
     { name: 'Обслуживание', index: line.events.findIndex((e) => e.state === 'SERVED') },
     { name: 'Диагностика', index: line.events.findIndex((e) => e.type === 'DIAGNOSTICS') },
   ].filter((phase) => phase.index >= 0)
@@ -152,126 +156,15 @@ async function start() {
     )
     .join('')
 
-  let strategy: 'optimal' | 'greedy' = 'optimal'
-  function matrix(s: Snapshot) {
-    const d = s.dispatch
-    if (!d) return '<p class="empty">Ожидание расчёта диспетчера.</p>'
-    const heading = d.columns
-      .map((id) => {
-        const c = line.calls.find((c) => c.id === id)!
-        return (
-          '<th scope="col">' + c.floor + ' этаж ' + (c.direction === 'UP' ? '↑' : '↓') + '</th>'
-        )
-      })
-      .join('')
-    const rows = d.rows
-      .map(
-        (id, r) =>
-          '<tr><th scope="row"><span class="row-id"><b class="dot-id ' +
-          id +
-          '"></b>' +
-          id +
-          '</span></th>' +
-          d.matrix[r]
-            .map((ms, c) => {
-              const selected = d[strategy].pairs.some((p) => p.car === id && p.column === c)
-              if (ms === null || !d.allowed[r][c])
-                return '<td><span class="eta-value blocked" aria-label="Назначение запрещено" title="Назначение запрещено">—</span></td>'
-              return (
-                '<td><span class="eta-value ' +
-                (selected ? 'selected' : '') +
-                '" ' +
-                (selected ? 'title="Выбрано в этом плане"' : '') +
-                '>' +
-                (selected ? icon('check') : '') +
-                sec(ms) +
-                ' с</span></td>'
-              )
-            })
-            .join('') +
-          '</tr>',
-      )
-      .join('')
-    const diff = d.greedy.totalEtaMs - d.optimal.totalEtaMs
-    const sameCount = d.greedy.pairs.length === d.optimal.pairs.length
-    const comparisons = (['optimal', 'greedy'] as const)
-      .map((key) => {
-        const plan = d[key]
-        const name = key === 'optimal' ? 'Оптимум' : 'Жадный выбор'
-        const value = plan.pairs.length ? sec(plan.totalEtaMs) + ' <small>с</small>' : '—'
-        return (
-          '<button data-plan="' +
-          key +
-          '" aria-pressed="' +
-          (strategy === key) +
-          '" title="Показать выбранные пары">' +
-          '<span>' +
-          name +
-          ' · Σ ETA</span><strong>' +
-          value +
-          '</strong></button>'
-        )
-      })
-      .join('')
-    const note = !sameCount
-      ? 'Назначено пар: оптимум ' + d.optimal.pairs.length + ', жадный ' + d.greedy.pairs.length
-      : diff > 0
-        ? 'Выигрыш по ETA — ' + sec(diff) + ' с'
-        : 'Суммы ETA совпадают'
-    return (
-      '<table class="eta-table"><thead><tr><th scope="col">Кабина</th>' +
-      heading +
-      '</tr></thead><tbody>' +
-      rows +
-      '</tbody></table><div class="comparison" aria-label="Сравнить выбранные пары">' +
-      comparisons +
-      '</div><p class="matrix-note">' +
-      icon(diff > 0 ? 'trend' : 'check') +
-      note +
-      '</p>'
-    )
-  }
+  let strategy: Strategy = 'optimal'
   el('matrix').onclick = (e) => {
     const button = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-plan]')
     if (!button) return
     strategy = button.dataset.plan === 'greedy' ? 'greedy' : 'optimal'
-    el('matrix').innerHTML = matrix(stateAt(line, time, index))
+    el('matrix').replaceChildren(matrixPanel(stateAt(line, time, index).dispatch, line.calls, strategy, sec))
     el('matrix')
       .querySelector<HTMLButtonElement>('[data-plan="' + strategy + '"]')
       ?.focus({ preventScroll: true })
-  }
-  function calls(s: Snapshot) {
-    const active = line.calls.filter((c) => s.calls[c.id])
-    el('call-count').textContent =
-      active.length +
-      ' ' +
-      (active.length === 1 ? 'вызов' : active.length === 0 ? 'вызовов' : 'вызова')
-    if (!active.length) return '<p class="empty">Зарегистрированных вызовов пока нет.</p>'
-    return (
-      '<table class="queue-table"><thead><tr><th>Этаж</th><th>Кабина</th><th>Состояние</th><th>Регистрация</th></tr></thead><tbody>' +
-      active
-        .map((c) => {
-          const v = s.calls[c.id]
-          return (
-            '<tr><td><span class="floor-call">' +
-            icon(c.direction === 'UP' ? 'up' : 'down') +
-            c.floor +
-            ' этаж</span></td><td><span class="row-id">' +
-            (v.car ? '<b class="dot-id ' + v.car + '"></b>' + v.car : '—') +
-            '</span></td><td><span class="state-chip ' +
-            v.state +
-            '" title="' +
-            states[v.state] +
-            '">' +
-            v.state +
-            '</span></td><td><span class="mono">' +
-            clock(v.registeredMs) +
-            '</span></td></tr>'
-          )
-        })
-        .join('') +
-      '</tbody></table>'
-    )
   }
   function render() {
     const s = stateAt(line, time, index)
@@ -290,11 +183,14 @@ async function start() {
         (car.speed === 0 ? '' : car.speed > 0 ? '↑ ' : '↓ ') +
         fmt(Math.abs(car.speed) / 1000, 1) +
         ' м/с' +
-        (singleTrip && id === 'A' ? ' · ' + car.positionMm + ' мм' : '')
+        (!demo && id === 'A' ? ' · ' + car.positionMm + ' мм' : '')
     }
     if (index !== lastPanel) {
-      el('matrix').innerHTML = matrix(s)
-      el('calls').innerHTML = calls(s)
+      el('matrix').replaceChildren(matrixPanel(s.dispatch, line.calls, strategy, sec))
+      const active = line.calls.filter((c) => s.calls[c.id]).map((c) => s.calls[c.id])
+      el('call-count').textContent = active.length + ' ' +
+        (active.length === 1 ? 'вызов' : active.length === 0 ? 'вызовов' : 'вызова')
+      el('calls').replaceChildren(callsPanel(active, clock))
       const logRows = line.events.slice(0, index + 1).map((event, i) => {
         const button = document.createElement('button')
         button.className = 'log-row'
@@ -377,8 +273,9 @@ async function start() {
   }
   scrub.oninput = () => {
     const requested = Number(scrub.value)
-    const nearest = line.events.reduce((a, b) =>
-      Math.abs(b.tMs - requested) < Math.abs(a.tMs - requested) ? b : a,
+    const nearest = line.events.reduce(
+      (best, event) => Math.abs(event.tMs - requested) < Math.abs(best.tMs - requested) ? event : best,
+      line.events[0],
     )
     seek(lastEventAt(line, nearest.tMs))
   }
@@ -423,46 +320,42 @@ async function start() {
   })
   el('help').onclick = () =>
     explain(
-      'Управление симулятором',
-      '<p>Модель показывает работу группы из трёх лифтов. Цвет и буква связывают кабину в разрезе с её телеметрией и строкой матрицы.</p><ul><li>Пробел запускает и приостанавливает показ.</li><li>Стрелки переключают события, включая одновременные.</li><li>Потяните модель, чтобы повернуть её. Кнопки + и − меняют масштаб.</li></ul>',
-      'cube',
+      'Управление симулятором', 'cube',
+      element('p', '', 'Модель показывает работу группы из трёх лифтов. Цвет и буква связывают кабину в разрезе с её телеметрией и строкой матрицы.'),
+      element('ul', '',
+        element('li', '', 'Пробел запускает и приостанавливает показ.'),
+        element('li', '', 'Стрелки переключают события, включая одновременные.'),
+        element('li', '', 'Потяните модель, чтобы повернуть её. Кнопки + и − меняют масштаб.')),
     )
   el('matrix-info').onclick = () =>
     explain(
-      'Как считается ETA',
-      (demo
-        ? '<p>В демо Python время до остановки рассчитано по прямому пути с примерным ускорением и остатком цикла дверей. Контрольный сценарий Rust использует собственную модель движения и остановок.</p>'
-        : '<p>Время до остановки, допустимые пары и назначения взяты из загруженной записи.</p>') +
-        '<p>Диспетчер сначала назначает максимум допустимых пар, затем минимизирует сумму ETA. Нажмите итог «Оптимум» или «Жадный выбор», чтобы увидеть соответствующие пары с галочками. Прочерк означает запрет назначения.</p><p>Для сравнения жадный алгоритм обрабатывает вызовы по порядку регистрации. Каждый раз он выбирает ближайшую по расстоянию свободную кабину с завершённым циклом дверей.</p>',
-      'matrix',
+      'Как считается ETA', 'matrix',
+      element('p', '', demo
+        ? 'В демо Python время до остановки рассчитано по прямому пути с примерным ускорением и остатком цикла дверей. Контрольный сценарий Rust использует собственную модель движения и остановок.'
+        : 'Время до остановки, допустимые пары и назначения взяты из загруженной записи.'),
+      element('p', '', 'Диспетчер сначала назначает максимум допустимых пар, затем минимизирует сумму ETA. Нажмите итог «Оптимум» или «Жадный выбор», чтобы увидеть соответствующие пары с галочками. Прочерк означает запрет назначения.'),
+      element('p', '', 'Для сравнения жадный алгоритм обрабатывает вызовы по порядку регистрации. Каждый раз он выбирает ближайшую по расстоянию свободную кабину с завершённым циклом дверей.'),
     )
-  el('scenario-info').onclick = () =>
-    explain(
-      title,
-      '<p>' +
-        (singleTrip
-          ? 'Кабина A начинает движение из покоя. Выберите контрольную точку, чтобы увидеть координату и скорость из записи. ETA заканчивается в момент точной остановки перед открытием дверей.'
-          : 'Одновременно поступают вызовы с 3-го этажа вниз и с 8-го вверх. В пути кабина A теряет подтверждение замка. Диспетчер передаёт вызов другой кабине.') +
-        '</p><div class="jump-list">' +
-        phases
-          .map(
-            (p) =>
-              '<button data-go="' +
-              p.index +
-              '">' +
-              p.name +
-              '<time>' +
-              clock(line.events[p.index].tMs) +
-              '</time></button>',
-          )
-          .join('') +
-        '</div><a class="switch-recording" href="' +
-        (singleTrip ? '?scenario=demo' : '?scenario=sil') +
-        '">' +
-        (singleTrip ? 'Открыть демо с отказом B1' : 'Открыть поездку Rust SIL') +
-        ' →</a>',
-      'route',
-    )
+  el('scenario-info').onclick = () => {
+    const body = document.createDocumentFragment()
+    const detail = singleTrip
+      ? 'Кабина A начинает движение из покоя. Выберите контрольную точку, чтобы увидеть координату и скорость из записи. ETA заканчивается в момент точной остановки перед открытием дверей.'
+      : 'Одновременно поступают вызовы с 3-го этажа вниз и с 8-го вверх. В пути кабина A теряет подтверждение замка. Диспетчер передаёт вызов другой кабине.'
+    const jumps = element('div', 'jump-list')
+    for (const phase of phases) {
+      const button = element('button', '', phase.name, element('time', '', clock(line.events[phase.index].tMs)))
+      button.dataset.go = String(phase.index)
+      jumps.append(button)
+    }
+    body.append(element('p', '', detail), jumps)
+    for (const [id, other] of Object.entries(recordings)) {
+      if (id === scenario) continue
+      const link = element('a', 'switch-recording', other.label + ' →')
+      link.href = '?scenario=' + id
+      body.append(link)
+    }
+    explain(title, 'route', body)
+  }
   function projection(front: boolean) {
     el('front').setAttribute('aria-pressed', String(front))
     el('iso').setAttribute('aria-pressed', String(!front))

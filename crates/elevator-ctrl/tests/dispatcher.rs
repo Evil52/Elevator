@@ -1,5 +1,5 @@
 use elevator_ctrl::assign;
-use elevator_ctrl::calls::{CallRecord, CallState, Press, Served};
+use elevator_ctrl::calls::{Assignment, CallRecord, CallState, Press, Served};
 use elevator_ctrl::dispatcher::{CarInput, Dispatcher, Event};
 use elevator_ctrl::eta::{
     Building, Call, CarMode, CarState, Direction, DoorTimes, EtaParams, QueuedCall, build_matrix,
@@ -55,6 +55,7 @@ fn idle(floor: u8) -> CarInput {
         },
         stopped_at: None,
         doors_open: false,
+        confirmations: [None; 2],
     }
 }
 
@@ -82,7 +83,23 @@ fn step<const C: usize, const K: usize>(
     cars: &[CarInput; C],
 ) -> Vec<Event> {
     let mut events = Vec::new();
-    group.step(now_ms, cars, |event| events.push(event));
+    let cars = std::array::from_fn(|i| {
+        let mut car = cars[i];
+        if let Some(floor) = car.stopped_at {
+            car.confirmations = [Up, Down].map(|direction| {
+                let call = call(floor, direction);
+                let record = group.calls().get(call)?;
+                (record.car == Some(car_id(i))).then_some(Assignment {
+                    call,
+                    id: record.id,
+                    car: car_id(i),
+                    attempt: record.attempt,
+                })
+            });
+        }
+        car
+    });
+    group.step(now_ms, &cars, |event| events.push(event));
     events
 }
 
@@ -101,7 +118,7 @@ fn assigned_car(events: &[Event]) -> usize {
     let cars: Vec<usize> = events
         .iter()
         .filter_map(|event| match event {
-            Event::Assigned { car, .. } => Some(usize::from(*car)),
+            Event::Assigned(Assignment { car, .. }) => Some(usize::from(*car)),
             _ => None,
         })
         .collect();
@@ -154,11 +171,12 @@ fn a_single_call_goes_to_the_car_with_the_smallest_eta() {
                 .expect("кабины есть");
             assert_eq!(
                 step(&mut group, 10, &cars),
-                [Event::Assigned {
+                [Event::Assigned(Assignment {
                     call: target,
                     id: 0,
-                    car: car_id(best)
-                }],
+                    car: car_id(best),
+                    attempt: 1
+                })],
                 "вызов {target:?}"
             );
             let got = record(&group, target).expect("вызов в таблице");
@@ -232,6 +250,7 @@ fn assert_table(
                 state: CallState::Queued,
                 registered_ms,
                 car: None,
+                attempt: 0,
             }),
             "{context}"
         );
@@ -244,6 +263,7 @@ fn assert_table(
                 state: CallState::Assigned,
                 registered_ms,
                 car: Some(car),
+                attempt: 1,
             }),
             "{context}"
         );
@@ -315,10 +335,13 @@ fn the_group_decision_equals_assign_over_build_matrix() {
                 .collect();
             let expected: Vec<Event> = picked
                 .iter()
-                .map(|&(car, column)| Event::Assigned {
-                    call: queued[column].0,
-                    id: queued[column].2,
-                    car,
+                .map(|&(car, column)| {
+                    Event::Assigned(Assignment {
+                        call: queued[column].0,
+                        id: queued[column].2,
+                        car,
+                        attempt: 1,
+                    })
                 })
                 .collect();
 
@@ -378,7 +401,7 @@ fn only_the_oldest_calls_within_the_window_are_considered() {
     let mut ids: Vec<u32> = events
         .iter()
         .filter_map(|event| match event {
-            Event::Assigned { id, .. } => Some(*id),
+            Event::Assigned(Assignment { id, .. }) => Some(*id),
             _ => None,
         })
         .collect();
@@ -395,7 +418,7 @@ fn only_the_oldest_calls_within_the_window_are_considered() {
     let mut ids: Vec<u32> = events
         .iter()
         .filter_map(|event| match event {
-            Event::Assigned { id, .. } => Some(*id),
+            Event::Assigned(Assignment { id, .. }) => Some(*id),
             _ => None,
         })
         .collect();
@@ -416,20 +439,22 @@ fn old_far_and_fresh_near(aging_cap_ms: u32) -> Event {
 fn the_oldest_call_wins_only_when_aging_is_on() {
     assert_eq!(
         old_far_and_fresh_near(0),
-        Event::Assigned {
+        Event::Assigned(Assignment {
             call: up(6),
             id: 1,
-            car: 0
-        },
+            car: 0,
+            attempt: 1
+        }),
         "без приоритета по ожиданию выигрывает ближний вызов"
     );
     assert_eq!(
         old_far_and_fresh_near(60_000),
-        Event::Assigned {
+        Event::Assigned(Assignment {
             call: up(9),
             id: 0,
-            car: 0
-        },
+            car: 0,
+            attempt: 1
+        }),
         "с приоритетом по ожиданию выигрывает давний вызов"
     );
 }
@@ -460,17 +485,19 @@ fn calls_stay_queued_while_no_car_is_available_and_go_out_when_one_returns() {
             state: CallState::Queued,
             registered_ms: 50,
             car: None,
+            attempt: 0,
         })
     );
 
     let events = step(&mut group, 400, &[idle(1), dead[1]]);
     assert_eq!(
         events,
-        [Event::Assigned {
+        [Event::Assigned(Assignment {
             call: down(7),
             id: 0,
-            car: 0
-        }]
+            car: 0,
+            attempt: 1
+        })]
     );
 }
 
@@ -481,11 +508,12 @@ fn a_call_is_served_after_the_car_arrives_and_the_doors_open() {
     let target = up(4);
     assert_eq!(
         step(&mut group, 200, &[idle(1)]),
-        [Event::Assigned {
+        [Event::Assigned(Assignment {
             call: target,
             id: 0,
-            car: 0
-        }]
+            car: 0,
+            attempt: 1
+        })]
     );
 
     assert_eq!(
@@ -619,11 +647,12 @@ fn an_arrived_call_does_not_add_another_stop_to_the_eta_of_its_car() {
     group.press(target, 400).expect("вызов");
     assert_eq!(
         step(&mut group, 500, &cars),
-        [Event::Assigned {
+        [Event::Assigned(Assignment {
             call: target,
             id: 1,
-            car: 0
-        }]
+            car: 0,
+            attempt: 1
+        })]
     );
 }
 
@@ -645,11 +674,12 @@ fn a_car_that_leaves_the_normal_mode_returns_its_call_and_another_car_takes_it()
                         id: 0,
                         car: car_id(owner)
                     },
-                    Event::Assigned {
+                    Event::Assigned(Assignment {
                         call: up(4),
                         id: 0,
-                        car: car_id(other)
-                    }
+                        car: car_id(other),
+                        attempt: 2
+                    })
                 ],
                 "режим {mode:?}, дошла до этажа: {arrived}"
             );
@@ -660,6 +690,7 @@ fn a_car_that_leaves_the_normal_mode_returns_its_call_and_another_car_takes_it()
                     state: CallState::Assigned,
                     registered_ms: 100,
                     car: Some(car_id(other)),
+                    attempt: 2,
                 })
             );
         }
@@ -701,7 +732,7 @@ fn fire_recall_cancels_every_call_and_assigns_nothing() {
 
     let mut cars = [idle(1), idle(5), idle(9)];
     for event in &events {
-        let Event::Assigned { call, car, .. } = event else {
+        let Event::Assigned(Assignment { call, car, .. }) = event else {
             panic!("ожидалось назначение, получено {event:?}");
         };
         cars[usize::from(*car)] = stopped(call.floor, false);
@@ -798,7 +829,7 @@ fn run_trace(seed: u64) -> Vec<Vec<Event>> {
         let mut assigned_cars = Vec::new();
         for event in &events {
             match *event {
-                Event::Assigned { call, id, car } => {
+                Event::Assigned(Assignment { call, id, car, .. }) => {
                     let got = record(&group, call).expect("назначенный вызов в таблице");
                     assert_eq!(
                         (got.id, got.state, got.car),
@@ -835,7 +866,7 @@ fn random_traces_keep_the_invariants_and_replay_identically() {
         );
         for event in first.iter().flatten() {
             let slot = match event {
-                Event::Assigned { .. } => 0,
+                Event::Assigned(_) => 0,
                 Event::Arrived { .. } => 1,
                 Event::Served { .. } => 2,
                 Event::Requeued { .. } => 3,
@@ -848,4 +879,31 @@ fn random_traces_keep_the_invariants_and_replay_identically() {
         totals.iter().all(|&count| count > 0),
         "не все виды событий встретились (назначено, прибыло, обслужено, возвращено, отменено): {totals:?}"
     );
+}
+
+#[test]
+fn a_late_stop_report_cannot_serve_a_retry_on_the_same_car() {
+    let mut group = dispatcher::<1, 2>(0);
+    let target = up(4);
+    group.press(target, 10).unwrap();
+    let Event::Assigned(first) = step(&mut group, 20, &[idle(1)])[0] else {
+        panic!()
+    };
+    step(&mut group, 30, &[with_mode(idle(1), CarMode::Unavailable)]);
+    let Event::Assigned(second) = step(&mut group, 40, &[idle(1)])[0] else {
+        panic!()
+    };
+    let mut car = stopped(4, true);
+    car.confirmations = [Some(first), None];
+    group.step(50, &[car], |event| {
+        panic!("stale report produced {event:?}")
+    });
+    assert_eq!(record(&group, target).unwrap().state, CallState::Assigned);
+    car.confirmations = [Some(second), None];
+    let mut events = Vec::new();
+    group.step(60, &[car], |event| events.push(event));
+    assert!(matches!(
+        events.as_slice(),
+        [Event::Arrived { .. }, Event::Served { .. }]
+    ));
 }
