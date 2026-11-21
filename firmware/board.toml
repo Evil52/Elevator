@@ -1,0 +1,53 @@
+[board]
+name = "NUCLEO-F429ZI"
+revision = "MB1137 B-01"
+mcu = "STM32F429ZIT6"
+probe_chip = "STM32F429ZITx"
+dbgmcu_idcode = "0x10076419"
+
+[clocks]
+hse_hz = 8000000
+hse_source = "ST-LINK MCO"
+hse_mode = "bypass"
+pll_prediv = 4
+pll_mul = 180
+pll_divp = 2
+sysclk_hz = 180000000
+ahb_hz = 180000000
+apb1_hz = 45000000
+apb2_hz = 90000000
+time_driver = "TIM2"
+tick_hz = 1000000
+
+[jumpers]
+hse_mco = { on = ["SB112", "SB149"], off = ["SB148", "SB8", "SB9"] }
+ld1_pb0 = { on = ["SB120"], off = ["SB119"] }
+b1_pc13 = { on = ["SB173"], off = ["SB180"] }
+usart3_stlink = { on = ["SB5", "SB6"] }
+
+[pins.ld1]
+pin = "PB0"
+role = "green LED, control loop alive"
+active = "high"
+
+[pins.ld2]
+pin = "PB7"
+role = "blue LED, gateway link"
+active = "high"
+
+[pins.ld3]
+pin = "PB14"
+role = "red LED, safety chain open or critical alarm"
+active = "high"
+
+[pins.b1]
+pin = "PC13"
+role = "user button"
+
+[pins.usart3_tx]
+pin = "PD8"
+role = "gateway link candidate, ST-LINK virtual COM port"
+
+[pins.usart3_rx]
+pin = "PD9"
+role = "gateway link candidate, ST-LINK virtual COM port"
