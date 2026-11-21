@@ -1,9 +1,10 @@
 use core::num::NonZeroU32;
 
 use cortex_m::peripheral::DWT;
+use elevator_fw_logic::button::{Button, ButtonEvent};
 use elevator_fw_logic::scenario::Scenario;
 use elevator_fw_logic::{JitterReport, JitterStats, led_on};
-use embassy_stm32::gpio::{Level, Output};
+use embassy_stm32::gpio::{Input, Level, Output};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
@@ -24,16 +25,19 @@ pub struct Reports {
     pub step_cycles: JitterReport,
 }
 
+pub static BUTTON: Signal<CriticalSectionRawMutex, ButtonEvent> = Signal::new();
+
 pub static REPORT: Signal<CriticalSectionRawMutex, Reports> = Signal::new();
 
 #[embassy_executor::task]
-pub async fn run(mut led: Output<'static>, cycles_per_us: u32) {
+pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u32) {
     let period = Duration::from_micros(u64::from(CONTROL_PERIOD_US.get()));
     let mut stats = JitterStats::new(CONTROL_PERIOD_US);
     let period_cycles = NonZeroU32::new(CONTROL_PERIOD_US.get().saturating_mul(cycles_per_us))
         .unwrap_or(NonZeroU32::MIN);
     let mut step_stats = JitterStats::new(period_cycles);
     let mut scenario = Scenario::new();
+    let mut button = Button::new();
     let start = Instant::now();
     scenario.restart(start.as_millis());
     let mut deadline = start + period;
@@ -50,6 +54,12 @@ pub async fn run(mut led: Output<'static>, cycles_per_us: u32) {
         } else {
             Level::Low
         });
+        if let Some(event) = button.update(deadline.as_millis(), b1.is_high()) {
+            if event == ButtonEvent::Long {
+                scenario.restart(deadline.as_millis());
+            }
+            BUTTON.signal(event);
+        }
         let began = DWT::cycle_count();
         scenario.step(deadline.as_millis());
         step_stats.record(DWT::cycle_count().wrapping_sub(began));

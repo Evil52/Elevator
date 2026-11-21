@@ -6,8 +6,9 @@ mod irq;
 
 use defmt::{error, info};
 use defmt_rtt as _;
+use elevator_fw_logic::button::ButtonEvent;
 use embassy_executor::Spawner;
-use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::interrupt::{self, InterruptExt, Priority};
 use embassy_stm32::rcc::{
     AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllMul, PllPDiv, PllPreDiv, PllSource, Sysclk,
@@ -55,6 +56,16 @@ async fn report(cycles_per_us: u32) {
     }
 }
 
+#[embassy_executor::task]
+async fn report_button() {
+    loop {
+        match control::BUTTON.wait().await {
+            ButtonEvent::Short => info!("b1: short press"),
+            ButtonEvent::Long => info!("b1: long press, scenario reset"),
+        }
+    }
+}
+
 #[embassy_executor::main]
 async fn main(low_spawner: Spawner) {
     let p = embassy_stm32::init(clock_config());
@@ -74,12 +85,18 @@ async fn main(low_spawner: Spawner) {
     core.DCB.enable_trace();
     core.DWT.enable_cycle_counter();
     let led = Output::new(p.PB0, Level::Low, Speed::Low);
+    let b1 = Input::new(p.PC13, Pull::None);
     interrupt::UART4.set_priority(Priority::P6);
     let high_spawner = irq::CONTROL_EXECUTOR.start(interrupt::UART4);
-    if let Ok(token) = control::run(led, cycles_per_us) {
+    if let Ok(token) = control::run(led, b1, cycles_per_us) {
         high_spawner.spawn(token);
     } else {
         error!("control task did not start");
+    }
+    if let Ok(token) = report_button() {
+        low_spawner.spawn(token);
+    } else {
+        error!("button report task did not start");
     }
     if let Ok(token) = report(cycles_per_us) {
         low_spawner.spawn(token);

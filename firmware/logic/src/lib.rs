@@ -2,6 +2,7 @@
 
 use core::num::NonZeroU32;
 
+pub mod button;
 pub mod scenario;
 
 #[must_use]
