@@ -31,14 +31,14 @@ impl MotionParams {
     #[must_use]
     pub fn braking_distance_mm(&self, speed_mm_s: u32) -> u32 {
         let (_, micrometres) = self.ramp(0, u128::from(speed_mm_s) * UM);
-        saturate(micrometres.div_ceil(UM))
+        saturate(div_ceil(micrometres, UM))
     }
 
     #[must_use]
     pub fn stopping_distance_mm(&self, speed_mm_s: u32, accel_mm_s2: u32) -> Option<u32> {
         let settle = self.settle(speed_mm_s, accel_mm_s2)?;
         let (_, brake_um) = self.ramp(0, settle.speed);
-        Some(saturate((settle.path + brake_um).div_ceil(UM)))
+        Some(saturate(div_ceil(settle.path + brake_um, UM)))
     }
 
     #[must_use]
@@ -68,9 +68,12 @@ impl MotionParams {
         let accel = u128::from(accel_mm_s2) * UM;
         let jerk = u128::from(self.jerk_mm_s3) * UM;
         let settled = Settled {
-            millis: (1000 * accel).div_ceil(jerk),
-            path: (3 * speed * accel * jerk + accel * accel * accel).div_ceil(3 * jerk * jerk),
-            speed: speed + (accel * accel).div_ceil(2 * jerk),
+            millis: div_ceil(1000 * accel, jerk),
+            path: div_ceil(
+                3 * speed * accel * jerk + accel * accel * accel,
+                3 * jerk * jerk,
+            ),
+            speed: speed + div_ceil(accel * accel, 2 * jerk),
         };
         (settled.speed <= u128::from(self.max_speed_mm_s) * UM).then_some(settled)
     }
@@ -86,10 +89,14 @@ impl MotionParams {
             });
         }
 
-        let (mut low, mut high) = (start, u128::from(self.max_speed_mm_s) * UM);
+        let top = u128::from(self.max_speed_mm_s) * UM;
+        let (mut low, mut high) = (start, top);
+        if self.profile_um(start, top) <= distance {
+            low = top;
+        }
         while low < high {
             let mid = low + (high - low).div_ceil(2);
-            if self.profile(start, mid).1 <= distance {
+            if self.profile_um(start, mid) <= distance {
                 low = mid;
             } else {
                 high = mid - 1;
@@ -97,7 +104,7 @@ impl MotionParams {
         }
         let cruise = low.max(1);
         let (ramps_ms, covered) = self.profile(start, cruise);
-        let cruise_ms = (1000 * distance.saturating_sub(covered)).div_ceil(cruise);
+        let cruise_ms = div_ceil(1000 * distance.saturating_sub(covered), cruise);
         Some(StopPlan {
             ramps_ms,
             cruise_ms,
@@ -105,9 +112,33 @@ impl MotionParams {
     }
 
     fn profile(&self, start: u128, cruise: u128) -> (u128, u128) {
-        let (accel_ms, accel_um) = self.ramp(start, cruise);
         let (brake_ms, brake_um) = self.ramp(0, cruise);
+        if start == 0 {
+            return (2 * brake_ms, 2 * brake_um);
+        }
+        let (accel_ms, accel_um) = self.ramp(start, cruise);
         (accel_ms + brake_ms, accel_um + brake_um)
+    }
+
+    fn profile_um(&self, start: u128, cruise: u128) -> u128 {
+        let brake_um = self.ramp_um(0, cruise);
+        if start == 0 {
+            return 2 * brake_um;
+        }
+        self.ramp_um(start, cruise) + brake_um
+    }
+
+    fn ramp_um(&self, from: u128, to: u128) -> u128 {
+        let delta = to - from;
+        let sum = from + to;
+        let accel = u128::from(self.accel_mm_s2) * UM;
+        let jerk = u128::from(self.jerk_mm_s3) * UM;
+        if delta * jerk >= accel * accel {
+            let numerator = delta * jerk + accel * accel;
+            div_ceil(sum * numerator, 2 * accel * jerk)
+        } else {
+            ceil_sqrt_ratio(sum * sum * delta, jerk)
+        }
     }
 
     fn ramp(&self, from: u128, to: u128) -> (u128, u128) {
@@ -118,8 +149,8 @@ impl MotionParams {
         if delta * jerk >= accel * accel {
             let numerator = delta * jerk + accel * accel;
             (
-                (1000 * numerator).div_ceil(accel * jerk),
-                (sum * numerator).div_ceil(2 * accel * jerk),
+                div_ceil(1000 * numerator, accel * jerk),
+                div_ceil(sum * numerator, 2 * accel * jerk),
             )
         } else {
             (
@@ -151,13 +182,24 @@ fn saturate(value: u128) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
+fn div_ceil(num: u128, den: u128) -> u128 {
+    match (u64::try_from(num), u64::try_from(den)) {
+        (Ok(num), Ok(den)) => u128::from(num.div_ceil(den)),
+        _ => num.div_ceil(den),
+    }
+}
+
 fn ceil_sqrt(n: u128) -> u128 {
+    if let Ok(small) = u64::try_from(n) {
+        let root = small.isqrt();
+        return u128::from(if root * root < small { root + 1 } else { root });
+    }
     let root = n.isqrt();
     if root * root < n { root + 1 } else { root }
 }
 
 fn ceil_sqrt_ratio(num: u128, den: u128) -> u128 {
-    ceil_sqrt(num.div_ceil(den))
+    ceil_sqrt(div_ceil(num, den))
 }
 
 #[derive(Clone, Copy, Debug)]
