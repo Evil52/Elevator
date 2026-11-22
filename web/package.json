@@ -1,0 +1,19 @@
+{
+  "name": "@elevator/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vite": "6.4.6",
+    "vitest": "4.1.12"
+  }
+}
