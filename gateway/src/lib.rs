@@ -1,8 +1,10 @@
 pub mod hub;
+pub mod journal;
 pub mod origin;
 pub mod server;
 
 pub use hub::Hub;
+pub use journal::{Direction, Journal};
 pub use origin::OriginPolicy;
 pub use server::Gateway;
 
