@@ -21,7 +21,7 @@ use embassy_stm32::rcc::{
 };
 use embassy_stm32::rng::Rng;
 use embassy_stm32::time::Hertz;
-use embassy_stm32::usart::{Config as UartConfig, UartTx};
+use embassy_stm32::usart::{Config as UartConfig, Uart};
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_time::{Duration, Ticker};
 use panic_probe as _;
@@ -158,10 +158,13 @@ async fn main(low_spawner: Spawner) {
     };
     let device_id = fold_uid(embassy_stm32::uid::uid());
     info!("boot id {} device id {}", boot_id, device_id);
-    let tx = UartTx::new(
+    link::BOOT_ID.store(boot_id, core::sync::atomic::Ordering::Relaxed);
+    let uart = Uart::new(
         p.USART3,
+        p.PD9,
         p.PD8,
         p.DMA1_CH3,
+        p.DMA1_CH1,
         irq::Irqs,
         UartConfig::default(),
     );
@@ -173,11 +176,17 @@ async fn main(low_spawner: Spawner) {
     } else {
         error!("control task did not start");
     }
-    if let Ok(tx) = tx {
-        if let Ok(token) = link::run(tx, Telemetry::new(device_id, boot_id), cause) {
+    if let Ok(uart) = uart {
+        let (tx, rx) = uart.split();
+        if let Ok(token) = link::transmit(tx, Telemetry::new(device_id, boot_id), cause) {
             low_spawner.spawn(token);
         } else {
-            error!("link task did not start");
+            error!("transmit task did not start");
+        }
+        if let Ok(token) = link::receive(rx) {
+            low_spawner.spawn(token);
+        } else {
+            error!("receive task did not start");
         }
     } else {
         error!("usart3 did not start");

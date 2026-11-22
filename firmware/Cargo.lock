@@ -279,6 +279,7 @@ dependencies = [
  "elevator-fw-logic",
  "elevator-wire",
  "embassy-executor",
+ "embassy-futures",
  "embassy-stm32",
  "embassy-sync",
  "embassy-time",

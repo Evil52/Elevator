@@ -3,6 +3,7 @@
 use core::num::NonZeroU32;
 
 pub mod button;
+pub mod commands;
 pub mod progress;
 pub mod reset;
 pub mod scenario;

@@ -3,7 +3,10 @@ use core::num::NonZeroU32;
 use core::cell::RefCell;
 use cortex_m::peripheral::DWT;
 
+use core::sync::atomic::Ordering;
+
 use elevator_fw_logic::button::{Button, ButtonEvent};
+use elevator_fw_logic::commands::execute;
 use elevator_fw_logic::progress::ProgressMonitor;
 use elevator_fw_logic::scenario::{CARS, Scenario};
 use elevator_fw_logic::{JitterReport, JitterStats, led_on};
@@ -70,11 +73,23 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
                 ButtonEvent::Short => scenario.toggle_failure(0),
                 ButtonEvent::Long => {
                     scenario.restart(deadline.as_millis());
-                    crate::link::NEW_RUN.signal(());
+                    crate::link::RUN_ID.fetch_add(1, Ordering::Relaxed);
                     false
                 }
             };
             BUTTON.signal((event, failed));
+        }
+        while let Ok(envelope) = crate::link::COMMANDS.try_receive() {
+            let reply = execute(
+                crate::link::BOOT_ID.load(Ordering::Relaxed),
+                crate::link::RUN_ID.load(Ordering::Relaxed),
+                &envelope,
+                &mut scenario,
+                deadline.as_millis(),
+            );
+            if let Some(reply) = reply {
+                let _ = crate::link::REPLIES.try_send(reply);
+            }
         }
         let began = DWT::cycle_count();
         scenario.step(deadline.as_millis());
