@@ -6,6 +6,7 @@ pub mod button;
 pub mod progress;
 pub mod reset;
 pub mod scenario;
+pub mod telemetry;
 
 #[must_use]
 pub fn led_on(now_ms: u64, period_ms: NonZeroU32) -> bool {

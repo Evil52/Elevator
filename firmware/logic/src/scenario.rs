@@ -1,6 +1,7 @@
 use elevator_ctrl::dispatcher::{CarInput, Dispatcher, Event};
 use elevator_ctrl::eta::{Building, Call, CarMode, CarState, Direction, DoorTimes, EtaParams};
 use elevator_ctrl::motion::MotionParams;
+use elevator_wire::protocol::{CarMode as WireMode, CarSnapshot, DoorState, JSON_SAFE_MAX};
 
 pub const FLOORS: usize = 10;
 pub const CARS: usize = 3;
@@ -106,6 +107,40 @@ impl Scenario {
             CarMode::Unavailable
         };
         input.state.mode == CarMode::Unavailable
+    }
+
+    #[must_use]
+    pub fn car_snapshot(&self, car: usize, now_ms: u64) -> Option<CarSnapshot> {
+        let state = self.cars.get(car)?.state;
+        let on_floor = state.position_mm % FLOOR_HEIGHT_MM == 0;
+        let floor = on_floor
+            .then(|| u8::try_from(state.position_mm / FLOOR_HEIGHT_MM + 1).ok())
+            .flatten();
+        let speed = i32::try_from(state.speed_mm_s).unwrap_or(i32::MAX);
+        Some(CarSnapshot {
+            car: u8::try_from(car).ok()?,
+            mode: match state.mode {
+                CarMode::Normal => WireMode::Normal,
+                CarMode::FireRecall => WireMode::FireRecall,
+                CarMode::Firefighters => WireMode::Firefighters,
+                CarMode::Unavailable => WireMode::Unavailable,
+            },
+            doors: if state.door_remaining_ms == 0 {
+                DoorState::Closed
+            } else {
+                DoorState::Open
+            },
+            floor,
+            position_mm: state.position_mm,
+            speed_mm_per_sec: match state.heading {
+                Direction::Up => speed,
+                Direction::Down => -speed,
+            },
+            eta_ms: None,
+            up_calls: state.up_calls,
+            down_calls: state.down_calls,
+            model_time_ms: now_ms.min(JSON_SAFE_MAX),
+        })
     }
 
     #[must_use]

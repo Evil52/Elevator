@@ -5,7 +5,7 @@ use cortex_m::peripheral::DWT;
 
 use elevator_fw_logic::button::{Button, ButtonEvent};
 use elevator_fw_logic::progress::ProgressMonitor;
-use elevator_fw_logic::scenario::Scenario;
+use elevator_fw_logic::scenario::{CARS, Scenario};
 use elevator_fw_logic::{JitterReport, JitterStats, led_on};
 use embassy_stm32::gpio::{Input, Level, Output};
 use embassy_sync::blocking_mutex::Mutex;
@@ -70,6 +70,7 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
                 ButtonEvent::Short => scenario.toggle_failure(0),
                 ButtonEvent::Long => {
                     scenario.restart(deadline.as_millis());
+                    crate::link::NEW_RUN.signal(());
                     false
                 }
             };
@@ -85,6 +86,9 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
                     step_cycles,
                 });
             }
+            crate::link::SNAPSHOTS.signal(core::array::from_fn::<_, CARS, _>(|car| {
+                scenario.car_snapshot(car, deadline.as_millis())
+            }));
             scenario.reload(deadline.as_millis());
             report_at += REPORT_EVERY;
         }

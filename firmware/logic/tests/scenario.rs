@@ -1,4 +1,5 @@
 use elevator_fw_logic::scenario::{CALLS, CARS, Scenario, StepEvents};
+use elevator_wire::protocol::{CarMode, DoorState};
 
 #[test]
 fn restart_registers_every_call_slot() {
@@ -97,4 +98,45 @@ fn reload_refills_the_queue_but_keeps_failures() {
     assert_eq!(scenario.reload(1000), Some(CALLS));
     assert!(scenario.is_failed(2));
     assert_eq!(scenario.step(1010).assigned, CARS - 1);
+}
+
+#[test]
+fn a_snapshot_describes_an_idle_car_on_its_floor() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    let snapshot = scenario.car_snapshot(1, 4_321).expect("snapshot");
+    assert_eq!(snapshot.car, 1);
+    assert_eq!(snapshot.mode, CarMode::Normal);
+    assert_eq!(snapshot.doors, DoorState::Closed);
+    assert_eq!(snapshot.floor, Some(5));
+    assert_eq!(snapshot.position_mm, 12_000);
+    assert_eq!(snapshot.speed_mm_per_sec, 0);
+    assert_eq!(snapshot.eta_ms, None);
+    assert_eq!(snapshot.model_time_ms, 4_321);
+}
+
+#[test]
+fn snapshots_cover_the_first_and_the_top_floor() {
+    let scenario = Scenario::new();
+    assert_eq!(scenario.car_snapshot(0, 0).expect("first").floor, Some(1));
+    assert_eq!(scenario.car_snapshot(2, 0).expect("top").floor, Some(10));
+}
+
+#[test]
+fn a_failed_car_reports_unavailable() {
+    let mut scenario = Scenario::new();
+    scenario.toggle_failure(0);
+    assert_eq!(
+        scenario.car_snapshot(0, 0).expect("snapshot").mode,
+        CarMode::Unavailable
+    );
+    assert_eq!(
+        scenario.car_snapshot(1, 0).expect("snapshot").mode,
+        CarMode::Normal
+    );
+}
+
+#[test]
+fn an_unknown_car_has_no_snapshot() {
+    assert_eq!(Scenario::new().car_snapshot(CARS, 0), None);
 }
