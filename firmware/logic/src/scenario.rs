@@ -11,6 +11,12 @@ const CAR_FLOORS: [u32; CARS] = [1, 5, 10];
 
 type Core = Dispatcher<FLOORS, CARS, CALLS>;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StepEvents {
+    pub assigned: usize,
+    pub requeued: usize,
+}
+
 pub struct Scenario {
     dispatcher: Option<Core>,
     cars: [CarInput; CARS],
@@ -54,6 +60,11 @@ impl Scenario {
     }
 
     pub fn restart(&mut self, now_ms: u64) -> Option<usize> {
+        self.cars = CAR_FLOORS.map(idle_car);
+        self.reload(now_ms)
+    }
+
+    pub fn reload(&mut self, now_ms: u64) -> Option<usize> {
         let mut dispatcher = Core::new(eta_params()?)?;
         let mut accepted = 0;
         for floor in 1..=9_u8 {
@@ -74,14 +85,34 @@ impl Scenario {
         Some(accepted)
     }
 
-    pub fn step(&mut self, now_ms: u64) -> usize {
-        let mut assigned = 0;
+    pub fn step(&mut self, now_ms: u64) -> StepEvents {
+        let mut events = StepEvents::default();
         if let Some(dispatcher) = self.dispatcher.as_mut() {
             dispatcher.step(now_ms, &self.cars, |event| {
-                assigned += usize::from(matches!(event, Event::Assigned(_)));
+                events.assigned += usize::from(matches!(event, Event::Assigned(_)));
+                events.requeued += usize::from(matches!(event, Event::Requeued { .. }));
             });
         }
-        assigned
+        events
+    }
+
+    pub fn toggle_failure(&mut self, car: usize) -> bool {
+        let Some(input) = self.cars.get_mut(car) else {
+            return false;
+        };
+        input.state.mode = if input.state.mode == CarMode::Unavailable {
+            CarMode::Normal
+        } else {
+            CarMode::Unavailable
+        };
+        input.state.mode == CarMode::Unavailable
+    }
+
+    #[must_use]
+    pub fn is_failed(&self, car: usize) -> bool {
+        self.cars
+            .get(car)
+            .is_some_and(|input| input.state.mode == CarMode::Unavailable)
     }
 }
 

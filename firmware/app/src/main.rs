@@ -60,8 +60,8 @@ async fn report(cycles_per_us: u32) {
 async fn report_button() {
     loop {
         match control::BUTTON.wait().await {
-            ButtonEvent::Short => info!("b1: short press"),
-            ButtonEvent::Long => info!("b1: long press, scenario reset"),
+            (ButtonEvent::Short, failed) => info!("b1: short press, car 0 lock failure {}", failed),
+            (ButtonEvent::Long, _) => info!("b1: long press, scenario reset"),
         }
     }
 }

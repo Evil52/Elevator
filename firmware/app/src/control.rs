@@ -25,7 +25,7 @@ pub struct Reports {
     pub step_cycles: JitterReport,
 }
 
-pub static BUTTON: Signal<CriticalSectionRawMutex, ButtonEvent> = Signal::new();
+pub static BUTTON: Signal<CriticalSectionRawMutex, (ButtonEvent, bool)> = Signal::new();
 
 pub static REPORT: Signal<CriticalSectionRawMutex, Reports> = Signal::new();
 
@@ -55,10 +55,14 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
             Level::Low
         });
         if let Some(event) = button.update(deadline.as_millis(), b1.is_high()) {
-            if event == ButtonEvent::Long {
-                scenario.restart(deadline.as_millis());
-            }
-            BUTTON.signal(event);
+            let failed = match event {
+                ButtonEvent::Short => scenario.toggle_failure(0),
+                ButtonEvent::Long => {
+                    scenario.restart(deadline.as_millis());
+                    false
+                }
+            };
+            BUTTON.signal((event, failed));
         }
         let began = DWT::cycle_count();
         scenario.step(deadline.as_millis());
@@ -70,7 +74,7 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
                     step_cycles,
                 });
             }
-            scenario.restart(deadline.as_millis());
+            scenario.reload(deadline.as_millis());
             report_at += REPORT_EVERY;
         }
         deadline += period;
