@@ -1,38 +1,79 @@
 use std::io::{BufRead, Read, Write};
-use std::sync::{Arc, Mutex};
+use std::net::TcpListener;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use elevator_gateway::{Bridge, to_json};
+use elevator_gateway::{Gateway, OriginPolicy};
 
 const DEFAULT_PORT: &str = "/dev/ttyACM0";
+const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
+const DEFAULT_ORIGIN: &str = "http://localhost:5173";
 const BAUD: u32 = 115_200;
 
+struct Options {
+    port: String,
+    listen: String,
+    origins: Vec<String>,
+    allow_no_origin: bool,
+}
+
+fn parse_options() -> Options {
+    let mut options = Options {
+        port: DEFAULT_PORT.to_owned(),
+        listen: DEFAULT_LISTEN.to_owned(),
+        origins: Vec::new(),
+        allow_no_origin: false,
+    };
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--listen" => options.listen = args.next().unwrap_or(options.listen),
+            "--origin" => {
+                if let Some(origin) = args.next() {
+                    options.origins.push(origin);
+                }
+            }
+            "--allow-no-origin" => options.allow_no_origin = true,
+            _ => options.port = arg,
+        }
+    }
+    if options.origins.is_empty() {
+        options.origins.push(DEFAULT_ORIGIN.to_owned());
+    }
+    options
+}
+
+fn die(message: &str) -> ! {
+    eprintln!("{message}");
+    std::process::exit(1);
+}
+
 fn main() {
-    let path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| DEFAULT_PORT.to_owned());
-    let port = match serialport::new(&path, BAUD)
+    let options = parse_options();
+    let port = serialport::new(&options.port, BAUD)
         .timeout(Duration::from_millis(100))
         .open()
-    {
-        Ok(port) => port,
-        Err(error) => {
-            eprintln!("cannot open {path}: {error}");
-            std::process::exit(1);
-        }
-    };
-    let mut writer = match port.try_clone() {
-        Ok(writer) => writer,
-        Err(error) => {
-            eprintln!("cannot clone {path}: {error}");
-            std::process::exit(1);
-        }
-    };
+        .unwrap_or_else(|error| die(&format!("cannot open {}: {error}", options.port)));
+    let writer = port
+        .try_clone()
+        .unwrap_or_else(|error| die(&format!("cannot clone {}: {error}", options.port)));
     let mut reader = port;
-    let bridge = Arc::new(Mutex::new(Bridge::new()));
+    let gateway = Gateway::new(
+        Box::new(writer),
+        OriginPolicy::new(options.origins.clone(), options.allow_no_origin),
+    );
 
-    let incoming = Arc::clone(&bridge);
+    let listener = TcpListener::bind(&options.listen)
+        .unwrap_or_else(|error| die(&format!("cannot listen on {}: {error}", options.listen)));
+    eprintln!(
+        "listening on {} for origins {:?}",
+        options.listen, options.origins
+    );
+    let server = Arc::clone(&gateway);
+    thread::spawn(move || server.serve(&listener));
+
+    let incoming = Arc::clone(&gateway);
     let reading = thread::spawn(move || {
         let mut buffer = [0_u8; 256];
         let stdout = std::io::stdout();
@@ -45,19 +86,10 @@ fn main() {
                     return;
                 }
             };
-            let envelopes = match incoming.lock() {
-                Ok(mut bridge) => bridge.feed(&buffer[..count]),
-                Err(_) => return,
-            };
             let mut out = stdout.lock();
-            for envelope in envelopes {
-                match to_json(&envelope) {
-                    Ok(line) => {
-                        if writeln!(out, "{line}").is_err() {
-                            return;
-                        }
-                    }
-                    Err(error) => eprintln!("json failed: {error}"),
+            for line in incoming.ingest(&buffer[..count]) {
+                if writeln!(out, "{line}").is_err() {
+                    return;
                 }
             }
             if out.flush().is_err() {
@@ -68,21 +100,8 @@ fn main() {
 
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let frame = match bridge.lock() {
-            Ok(mut bridge) => bridge.command_frame(&line),
-            Err(_) => break,
-        };
-        match frame {
-            Ok(bytes) => {
-                if let Err(error) = writer.write_all(&bytes) {
-                    eprintln!("write failed: {error}");
-                    break;
-                }
-            }
-            Err(error) => eprintln!("command refused: {error:?}"),
+        if !line.trim().is_empty() && !gateway.command(&line) {
+            eprintln!("command refused");
         }
     }
     let _ = reading.join();
