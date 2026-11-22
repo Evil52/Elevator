@@ -1,7 +1,8 @@
 use elevator_ctrl::calls::{Press, Rejection};
 use elevator_ctrl::eta::{Call, Direction};
+use elevator_fw_logic::alarms::AlarmError;
 use elevator_fw_logic::scenario::{CALLS, CARS, CarError, PressError, Scenario, StepEvents};
-use elevator_wire::protocol::{CarMode, DoorState};
+use elevator_wire::protocol::{AlarmKind, AlarmState, CarMode, DoorState, Event, EventKind};
 
 #[test]
 fn restart_registers_every_call_slot() {
@@ -261,4 +262,233 @@ fn reset_gives_an_empty_healthy_running_scenario() {
         scenario.press(call(3, Direction::Down), 20),
         Ok(Press::Created(_))
     ));
+}
+
+fn events_of(scenario: &Scenario) -> Vec<Event> {
+    let mut all = Vec::new();
+    let mut from = 0;
+    loop {
+        let chunk = scenario.events_chunk(from);
+        let got: Vec<Event> = chunk.events.iter().flatten().copied().collect();
+        if got.is_empty() {
+            return all;
+        }
+        from = got.last().map_or(from, |event| event.index + 1);
+        all.extend(got);
+    }
+}
+
+fn kinds(events: &[Event]) -> Vec<EventKind> {
+    events.iter().map(|event| event.kind).collect()
+}
+
+#[test]
+fn assignments_are_logged_with_car_call_and_time() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    scenario.step(10);
+    let events = events_of(&scenario);
+    assert_eq!(kinds(&events), vec![EventKind::Assigned; 3]);
+    assert!(events.iter().all(|event| event.at_ms == 10));
+    let mut cars: Vec<Option<u8>> = events.iter().map(|event| event.car).collect();
+    cars.sort();
+    assert_eq!(cars, vec![Some(0), Some(1), Some(2)]);
+    assert_eq!(
+        events.iter().map(|event| event.index).collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+}
+
+#[test]
+fn a_failed_car_raises_an_alarm_and_a_recovery_clears_it() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    let before = scenario.alarm_version();
+    scenario.step(40);
+    scenario.fail_car(1).ok();
+    let page = scenario.alarm_page(0);
+    assert_eq!(page.total, 1);
+    let alarm = page.items[0].expect("alarm");
+    assert_eq!(
+        (alarm.kind, alarm.car, alarm.state),
+        (AlarmKind::CarFault, Some(1), AlarmState::Active)
+    );
+    assert_eq!(alarm.raised_at_ms, 40);
+    assert_ne!(scenario.alarm_version(), before);
+    let raised = events_of(&scenario);
+    assert_eq!(kinds(&raised), vec![EventKind::AlarmRaised]);
+    assert_eq!((raised[0].car, raised[0].id), (Some(1), alarm.id));
+    scenario.step(50);
+    scenario.recover_car(1).ok();
+    assert_eq!(
+        scenario.alarm_page(0).items[0].map(|a| a.state),
+        Some(AlarmState::Cleared)
+    );
+    assert_eq!(
+        kinds(&events_of(&scenario)),
+        vec![EventKind::AlarmRaised, EventKind::AlarmCleared]
+    );
+}
+
+#[test]
+fn the_button_toggle_raises_and_clears_the_same_alarm() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    scenario.toggle_failure(0);
+    assert_eq!(
+        scenario.alarm_page(0).items[0].map(|a| a.state),
+        Some(AlarmState::Active)
+    );
+    scenario.toggle_failure(0);
+    assert_eq!(
+        scenario.alarm_page(0).items[0].map(|a| a.state),
+        Some(AlarmState::Cleared)
+    );
+}
+
+#[test]
+fn failing_a_failed_car_again_makes_no_second_alarm() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    scenario.fail_car(0).ok();
+    assert_eq!(scenario.fail_car(0), Err(CarError::WrongState));
+    assert_eq!(scenario.alarm_page(0).total, 1);
+}
+
+#[test]
+fn requeued_calls_of_a_failed_car_are_logged() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    scenario.step(10);
+    scenario.fail_car(0).ok();
+    scenario.step(20);
+    let events = events_of(&scenario);
+    let requeued: Vec<&Event> = events
+        .iter()
+        .filter(|event| event.kind == EventKind::Requeued)
+        .collect();
+    assert_eq!(requeued.len(), 1);
+    assert_eq!((requeued[0].car, requeued[0].at_ms), (Some(0), 20));
+}
+
+#[test]
+fn acknowledging_an_alarm_changes_its_state_and_is_logged() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    assert_eq!(scenario.acknowledge_alarm(1), Err(AlarmError::NoSuchAlarm));
+    scenario.fail_car(2).ok();
+    let version = scenario.alarm_version();
+    assert_eq!(scenario.acknowledge_alarm(1), Ok(()));
+    assert_ne!(scenario.alarm_version(), version);
+    assert_eq!(
+        scenario.alarm_page(0).items[0].map(|a| a.state),
+        Some(AlarmState::Acknowledged)
+    );
+    assert_eq!(scenario.acknowledge_alarm(1), Err(AlarmError::WrongState));
+    assert_eq!(
+        kinds(&events_of(&scenario)),
+        vec![EventKind::AlarmRaised, EventKind::AlarmAcked]
+    );
+}
+
+#[test]
+fn the_version_changes_only_when_alarms_change() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    let version = scenario.alarm_version();
+    scenario.step(10);
+    scenario.press(call(3, Direction::Down), 11).ok();
+    assert_eq!(scenario.alarm_version(), version);
+}
+
+#[test]
+fn log_overflow_raises_an_alarm_that_survives_further_overflow() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    for round in 0..40 {
+        scenario.step(round * 10);
+        scenario.fail_car(0).ok();
+        scenario.recover_car(0).ok();
+    }
+    let overflow = (0..2)
+        .find_map(|offset| {
+            scenario
+                .alarm_page(offset * 8)
+                .items
+                .into_iter()
+                .flatten()
+                .find(|a| a.kind == AlarmKind::LogOverflow)
+        })
+        .expect("overflow alarm");
+    assert_eq!((overflow.car, overflow.state), (None, AlarmState::Active));
+    for round in 40..120 {
+        scenario.step(round * 10);
+        scenario.fail_car(0).ok();
+        scenario.recover_car(0).ok();
+    }
+    let page = scenario.alarm_page(0);
+    assert!(
+        page.items
+            .iter()
+            .flatten()
+            .any(|a| a.id == overflow.id && a.state == AlarmState::Active)
+    );
+}
+
+#[test]
+fn reset_clears_the_log_and_the_alarms() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    scenario.step(10);
+    scenario.fail_car(0).ok();
+    let version = scenario.alarm_version();
+    scenario.reset();
+    assert_eq!(events_of(&scenario), Vec::new());
+    assert_eq!(scenario.alarm_page(0).total, 0);
+    assert_ne!(scenario.alarm_version(), version);
+}
+
+#[test]
+fn dispatcher_events_alone_can_overflow_the_log_and_raise_the_alarm() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    for round in 0..5_u64 {
+        for tick in 1..=6 {
+            scenario.step(round * 100 + tick * 10);
+        }
+        scenario.reload(round * 100 + 90);
+    }
+    let found = (0..2).any(|offset| {
+        scenario
+            .alarm_page(offset * 8)
+            .items
+            .into_iter()
+            .flatten()
+            .any(|alarm| alarm.kind == AlarmKind::LogOverflow)
+    });
+    assert!(found);
+}
+
+#[test]
+fn the_acknowledgement_event_names_the_car_and_the_alarm() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    scenario.fail_car(2).ok();
+    scenario.acknowledge_alarm(1).ok();
+    let events = events_of(&scenario);
+    assert_eq!(
+        (events[1].kind, events[1].car, events[1].id),
+        (EventKind::AlarmAcked, Some(2), 1)
+    );
+}
+
+#[test]
+fn restart_also_forgets_the_history() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    scenario.step(10);
+    scenario.fail_car(0).ok();
+    scenario.restart(100);
+    assert_eq!(events_of(&scenario), Vec::new());
+    assert_eq!(scenario.alarm_page(0).total, 0);
 }

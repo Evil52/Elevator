@@ -1,10 +1,11 @@
 use elevator_ctrl::calls::Rejection as CallRejection;
 use elevator_ctrl::eta::{Call, Direction as CoreDirection};
 use elevator_wire::protocol::{
-    CallFloor, CommandResult, CommandStatus, Direction, Envelope, InjectFault, Message, RecoverCar,
-    Rejection, SimAction, SimControl,
+    AckAlarm, CallFloor, CommandResult, CommandStatus, Direction, Envelope, EventLogChunk,
+    InjectFault, Message, RecoverCar, Rejection, SimAction, SimControl,
 };
 
+use crate::alarms::AlarmError;
 use crate::scenario::{CarError, PressError, Scenario};
 
 const fn core_direction(direction: Direction) -> CoreDirection {
@@ -75,6 +76,26 @@ fn sim_control(command: SimControl, scenario: &mut Scenario) -> CommandStatus {
     applied(changed.then_some(()).ok_or(Rejection::WrongState))
 }
 
+fn ack_alarm(command: AckAlarm, scenario: &mut Scenario) -> CommandStatus {
+    match scenario.acknowledge_alarm(command.alarm_id) {
+        Ok(()) => CommandStatus::Applied,
+        Err(AlarmError::NoSuchAlarm) => CommandStatus::Rejected(Rejection::NoSuchAlarm),
+        Err(AlarmError::WrongState | AlarmError::TableFull) => {
+            CommandStatus::Rejected(Rejection::WrongState)
+        }
+    }
+}
+
+fn identity_status(boot_id: u32, run_id: u32, envelope: &Envelope) -> Option<CommandStatus> {
+    if envelope.boot_id != boot_id {
+        Some(CommandStatus::Rejected(Rejection::WrongBoot))
+    } else if envelope.run_id != run_id {
+        Some(CommandStatus::Rejected(Rejection::WrongRun))
+    } else {
+        None
+    }
+}
+
 #[must_use]
 pub fn execute(
     boot_id: u32,
@@ -91,18 +112,40 @@ pub fn execute(
         Message::AckAlarm(command) => command.request_id,
         _ => return None,
     };
-    let status = if envelope.boot_id != boot_id {
-        CommandStatus::Rejected(Rejection::WrongBoot)
-    } else if envelope.run_id != run_id {
-        CommandStatus::Rejected(Rejection::WrongRun)
-    } else {
-        match envelope.message {
+    let status =
+        identity_status(boot_id, run_id, envelope).unwrap_or_else(|| match envelope.message {
             Message::CallFloor(command) => call_floor(command, scenario, now_ms),
             Message::InjectFault(command) => inject_fault(command, scenario),
             Message::RecoverCar(command) => recover_car(command, scenario),
             Message::SimControl(command) => sim_control(command, scenario),
-            _ => CommandStatus::Rejected(Rejection::NoSuchAlarm),
-        }
-    };
+            Message::AckAlarm(command) => ack_alarm(command, scenario),
+            _ => CommandStatus::Unknown,
+        });
     Some(CommandResult { request_id, status })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reply {
+    Result(CommandResult),
+    Log(EventLogChunk),
+}
+
+#[must_use]
+pub fn answer(
+    boot_id: u32,
+    run_id: u32,
+    envelope: &Envelope,
+    scenario: &mut Scenario,
+    now_ms: u64,
+) -> Option<Reply> {
+    if let Message::ReadLog(read) = envelope.message {
+        return Some(match identity_status(boot_id, run_id, envelope) {
+            Some(status) => Reply::Result(CommandResult {
+                request_id: read.request_id,
+                status,
+            }),
+            None => Reply::Log(scenario.events_chunk(read.from_index)),
+        });
+    }
+    execute(boot_id, run_id, envelope, scenario, now_ms).map(Reply::Result)
 }
