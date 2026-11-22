@@ -1,8 +1,8 @@
 use elevator_fw_logic::reset::ResetCause;
 use elevator_fw_logic::telemetry::{Telemetry, reset_reason};
 use elevator_wire::protocol::{
-    CarMode, CarSnapshot, DoorState, Envelope, Message, PROTOCOL_VERSION, ResetReason,
-    decode_message,
+    CarMode, CarSnapshot, CommandResult, CommandStatus, DoorState, Envelope, Message,
+    PROTOCOL_VERSION, ResetReason, decode_message,
 };
 use elevator_wire::{MAX_FRAME, MAX_PAYLOAD, decode_frame};
 
@@ -155,4 +155,35 @@ fn a_snapshot_the_protocol_rejects_is_an_error_and_consumes_no_number() {
         .expect("snapshot");
     let (frame_seq, envelope) = open(&out[..len]).expect("open");
     assert_eq!((frame_seq, envelope.seq), (0, 0));
+}
+
+#[test]
+fn a_command_result_round_trips_and_carries_the_current_run() {
+    let mut telemetry = Telemetry::new(DEVICE, BOOT);
+    telemetry.next_run();
+    let mut out = [0_u8; MAX_FRAME];
+    let result = CommandResult {
+        request_id: 41,
+        status: CommandStatus::Accepted,
+    };
+    let len = telemetry.command_result(result, &mut out).expect("result");
+    let (_, envelope) = open(&out[..len]).expect("open");
+    assert_eq!((envelope.boot_id, envelope.run_id), (BOOT, 2));
+    assert_eq!(envelope.message, Message::CommandResult(result));
+    assert_eq!((telemetry.boot_id(), telemetry.run_id()), (BOOT, 2));
+}
+
+#[test]
+fn set_run_replaces_the_run_id_without_touching_the_counters() {
+    let mut telemetry = Telemetry::new(DEVICE, BOOT);
+    let mut out = [0_u8; MAX_FRAME];
+    telemetry
+        .hello(ResetCause::PowerOn, &mut out)
+        .expect("hello");
+    telemetry.set_run(9);
+    let len = telemetry
+        .car_snapshot(snapshot(0), &mut out)
+        .expect("snapshot");
+    let (frame_seq, envelope) = open(&out[..len]).expect("open");
+    assert_eq!((envelope.run_id, envelope.seq, frame_seq), (9, 1, 1));
 }

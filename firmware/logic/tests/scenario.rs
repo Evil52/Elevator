@@ -1,4 +1,6 @@
-use elevator_fw_logic::scenario::{CALLS, CARS, Scenario, StepEvents};
+use elevator_ctrl::calls::{Press, Rejection};
+use elevator_ctrl::eta::{Call, Direction};
+use elevator_fw_logic::scenario::{CALLS, CARS, PressError, Scenario, StepEvents};
 use elevator_wire::protocol::{CarMode, DoorState};
 
 #[test]
@@ -139,4 +141,65 @@ fn a_failed_car_reports_unavailable() {
 #[test]
 fn an_unknown_car_has_no_snapshot() {
     assert_eq!(Scenario::new().car_snapshot(CARS, 0), None);
+}
+
+fn call(floor: u8, direction: Direction) -> Call {
+    Call { floor, direction }
+}
+
+#[test]
+fn pressing_before_the_scenario_runs_is_refused() {
+    let mut scenario = Scenario::new();
+    assert_eq!(
+        scenario.press(call(3, Direction::Down), 0),
+        Err(PressError::NotRunning)
+    );
+}
+
+#[test]
+fn an_empty_start_has_no_calls_until_one_is_pressed() {
+    let mut scenario = Scenario::new();
+    assert_eq!(scenario.start_empty(), Some(()));
+    assert_eq!(scenario.step(10), StepEvents::default());
+    assert!(matches!(
+        scenario.press(call(3, Direction::Down), 20),
+        Ok(Press::Created(_))
+    ));
+    assert_eq!(scenario.step(30).assigned, 1);
+}
+
+#[test]
+fn pressing_the_same_call_twice_makes_one_call() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    let first = scenario.press(call(8, Direction::Up), 0);
+    let second = scenario.press(call(8, Direction::Up), 5);
+    let (Ok(Press::Created(id)), Ok(Press::Duplicate(again))) = (first, second) else {
+        panic!("expected a created call and a duplicate: {first:?} {second:?}");
+    };
+    assert_eq!(id, again);
+    assert_eq!(scenario.step(10).assigned, 1);
+}
+
+#[test]
+fn impossible_buttons_are_rejected_with_the_reason() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    assert_eq!(
+        scenario.press(call(0, Direction::Up), 0),
+        Err(PressError::Call(Rejection::NoSuchFloor))
+    );
+    assert_eq!(
+        scenario.press(call(11, Direction::Down), 0),
+        Err(PressError::Call(Rejection::NoSuchFloor))
+    );
+    assert_eq!(
+        scenario.press(call(1, Direction::Down), 0),
+        Err(PressError::Call(Rejection::DownFromFirst))
+    );
+    assert_eq!(
+        scenario.press(call(10, Direction::Up), 0),
+        Err(PressError::Call(Rejection::UpFromTop))
+    );
+    assert_eq!(scenario.step(10), StepEvents::default());
 }

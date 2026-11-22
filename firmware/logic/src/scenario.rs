@@ -1,3 +1,4 @@
+use elevator_ctrl::calls::{Press, Rejection};
 use elevator_ctrl::dispatcher::{CarInput, Dispatcher, Event};
 use elevator_ctrl::eta::{Building, Call, CarMode, CarState, Direction, DoorTimes, EtaParams};
 use elevator_ctrl::motion::MotionParams;
@@ -11,6 +12,12 @@ const FLOOR_HEIGHT_MM: u32 = 3000;
 const CAR_FLOORS: [u32; CARS] = [1, 5, 10];
 
 type Core = Dispatcher<FLOORS, CARS, CALLS>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PressError {
+    NotRunning,
+    Call(Rejection),
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StepEvents {
@@ -63,6 +70,19 @@ impl Scenario {
     pub fn restart(&mut self, now_ms: u64) -> Option<usize> {
         self.cars = CAR_FLOORS.map(idle_car);
         self.reload(now_ms)
+    }
+
+    pub fn start_empty(&mut self) -> Option<()> {
+        self.dispatcher = Some(Core::new(eta_params()?)?);
+        Some(())
+    }
+
+    pub fn press(&mut self, call: Call, now_ms: u64) -> Result<Press, PressError> {
+        self.dispatcher
+            .as_mut()
+            .ok_or(PressError::NotRunning)?
+            .press(call, now_ms)
+            .map_err(PressError::Call)
     }
 
     pub fn reload(&mut self, now_ms: u64) -> Option<usize> {

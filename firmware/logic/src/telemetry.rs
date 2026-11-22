@@ -1,5 +1,6 @@
 use elevator_wire::protocol::{
-    CarSnapshot, Envelope, Hello, Message, PROTOCOL_VERSION, ResetReason, encode_message,
+    CarSnapshot, CommandResult, Envelope, Hello, Message, PROTOCOL_VERSION, ResetReason,
+    encode_message,
 };
 use elevator_wire::{MAX_FRAME, MAX_PAYLOAD, encode_frame};
 
@@ -43,6 +44,10 @@ impl Telemetry {
         }
     }
 
+    pub const fn set_run(&mut self, run_id: u32) {
+        self.run_id = run_id;
+    }
+
     pub const fn next_run(&mut self) {
         self.run_id = self.run_id.wrapping_add(1);
     }
@@ -67,6 +72,24 @@ impl Telemetry {
         out: &mut [u8; MAX_FRAME],
     ) -> Result<usize, LinkError> {
         self.emit(Message::CarSnapshot(snapshot), out)
+    }
+
+    #[must_use]
+    pub const fn boot_id(&self) -> u32 {
+        self.boot_id
+    }
+
+    #[must_use]
+    pub const fn run_id(&self) -> u32 {
+        self.run_id
+    }
+
+    pub fn command_result(
+        &mut self,
+        result: CommandResult,
+        out: &mut [u8; MAX_FRAME],
+    ) -> Result<usize, LinkError> {
+        self.emit(Message::CommandResult(result), out)
     }
 
     fn emit(&mut self, message: Message, out: &mut [u8; MAX_FRAME]) -> Result<usize, LinkError> {
