@@ -25,8 +25,9 @@ pub async fn transmit(mut tx: UartTx<'static, Async>, mut telemetry: Telemetry, 
         let _ = tx.write(&frame[..length]).await;
     }
     loop {
+        let event = select(SNAPSHOTS.wait(), REPLIES.receive()).await;
         telemetry.set_run(RUN_ID.load(Ordering::Relaxed));
-        match select(SNAPSHOTS.wait(), REPLIES.receive()).await {
+        match event {
             Either::First(snapshots) => {
                 for snapshot in snapshots.into_iter().flatten() {
                     if let Ok(length) = telemetry.car_snapshot(snapshot, &mut frame) {

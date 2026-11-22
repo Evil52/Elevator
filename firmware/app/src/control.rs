@@ -10,6 +10,9 @@ use elevator_fw_logic::commands::execute;
 use elevator_fw_logic::progress::ProgressMonitor;
 use elevator_fw_logic::scenario::{CARS, Scenario};
 use elevator_fw_logic::{JitterReport, JitterStats, led_on};
+use elevator_wire::protocol::{
+    CommandResult, CommandStatus, Envelope, Message, SimAction, SimControl,
+};
 use embassy_stm32::gpio::{Input, Level, Output};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -42,6 +45,24 @@ pub static BUTTON: Signal<CriticalSectionRawMutex, (ButtonEvent, bool)> = Signal
 
 pub static REPORT: Signal<CriticalSectionRawMutex, Reports> = Signal::new();
 
+fn fresh(scenario: &mut Scenario, now_ms: u64) {
+    if cfg!(feature = "load-test") {
+        scenario.restart(now_ms);
+    } else {
+        scenario.reset();
+    }
+}
+
+fn resets_run(envelope: &Envelope, reply: &CommandResult) -> bool {
+    matches!(
+        envelope.message,
+        Message::SimControl(SimControl {
+            action: SimAction::Reset,
+            ..
+        })
+    ) && reply.status == CommandStatus::Applied
+}
+
 #[embassy_executor::task]
 pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u32) {
     let period = Duration::from_micros(u64::from(CONTROL_PERIOD_US.get()));
@@ -52,7 +73,7 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
     let mut scenario = Scenario::new();
     let mut button = Button::new();
     let start = Instant::now();
-    scenario.restart(start.as_millis());
+    fresh(&mut scenario, start.as_millis());
     let mut deadline = start + period;
     let mut report_at = start + REPORT_EVERY;
     loop {
@@ -72,7 +93,7 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
             let failed = match event {
                 ButtonEvent::Short => scenario.toggle_failure(0),
                 ButtonEvent::Long => {
-                    scenario.restart(deadline.as_millis());
+                    fresh(&mut scenario, deadline.as_millis());
                     crate::link::RUN_ID.fetch_add(1, Ordering::Relaxed);
                     false
                 }
@@ -88,6 +109,9 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
                 deadline.as_millis(),
             );
             if let Some(reply) = reply {
+                if resets_run(&envelope, &reply) {
+                    crate::link::RUN_ID.fetch_add(1, Ordering::Relaxed);
+                }
                 let _ = crate::link::REPLIES.try_send(reply);
             }
         }
@@ -104,7 +128,9 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
             crate::link::SNAPSHOTS.signal(core::array::from_fn::<_, CARS, _>(|car| {
                 scenario.car_snapshot(car, deadline.as_millis())
             }));
-            scenario.reload(deadline.as_millis());
+            if cfg!(feature = "load-test") {
+                scenario.reload(deadline.as_millis());
+            }
             report_at += REPORT_EVERY;
         }
         deadline += period;

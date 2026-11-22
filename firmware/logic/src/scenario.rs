@@ -19,6 +19,12 @@ pub enum PressError {
     Call(Rejection),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CarError {
+    NoSuchCar,
+    WrongState,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StepEvents {
     pub assigned: usize,
@@ -28,6 +34,7 @@ pub struct StepEvents {
 pub struct Scenario {
     dispatcher: Option<Core>,
     cars: [CarInput; CARS],
+    paused: bool,
 }
 
 fn eta_params() -> Option<EtaParams> {
@@ -64,12 +71,49 @@ impl Scenario {
         Self {
             dispatcher: None,
             cars: CAR_FLOORS.map(idle_car),
+            paused: false,
         }
     }
 
     pub fn restart(&mut self, now_ms: u64) -> Option<usize> {
         self.cars = CAR_FLOORS.map(idle_car);
+        self.paused = false;
         self.reload(now_ms)
+    }
+
+    pub fn fail_car(&mut self, car: usize) -> Result<(), CarError> {
+        let input = self.cars.get_mut(car).ok_or(CarError::NoSuchCar)?;
+        if input.state.mode == CarMode::Unavailable {
+            return Err(CarError::WrongState);
+        }
+        input.state.mode = CarMode::Unavailable;
+        Ok(())
+    }
+
+    pub fn recover_car(&mut self, car: usize) -> Result<(), CarError> {
+        let input = self.cars.get_mut(car).ok_or(CarError::NoSuchCar)?;
+        if input.state.mode != CarMode::Unavailable {
+            return Err(CarError::WrongState);
+        }
+        input.state.mode = CarMode::Normal;
+        Ok(())
+    }
+
+    pub const fn set_paused(&mut self, paused: bool) -> bool {
+        let changed = self.paused != paused;
+        self.paused = paused;
+        changed
+    }
+
+    #[must_use]
+    pub const fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    pub fn reset(&mut self) -> Option<()> {
+        self.cars = CAR_FLOORS.map(idle_car);
+        self.paused = false;
+        self.start_empty()
     }
 
     pub fn start_empty(&mut self) -> Option<()> {
@@ -108,6 +152,9 @@ impl Scenario {
 
     pub fn step(&mut self, now_ms: u64) -> StepEvents {
         let mut events = StepEvents::default();
+        if self.paused {
+            return events;
+        }
         if let Some(dispatcher) = self.dispatcher.as_mut() {
             dispatcher.step(now_ms, &self.cars, |event| {
                 events.assigned += usize::from(matches!(event, Event::Assigned(_)));

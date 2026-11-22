@@ -1,6 +1,6 @@
 use elevator_ctrl::calls::{Press, Rejection};
 use elevator_ctrl::eta::{Call, Direction};
-use elevator_fw_logic::scenario::{CALLS, CARS, PressError, Scenario, StepEvents};
+use elevator_fw_logic::scenario::{CALLS, CARS, CarError, PressError, Scenario, StepEvents};
 use elevator_wire::protocol::{CarMode, DoorState};
 
 #[test]
@@ -202,4 +202,63 @@ fn impossible_buttons_are_rejected_with_the_reason() {
         Err(PressError::Call(Rejection::UpFromTop))
     );
     assert_eq!(scenario.step(10), StepEvents::default());
+}
+
+#[test]
+fn a_car_can_be_failed_once() {
+    let mut scenario = Scenario::new();
+    assert_eq!(scenario.fail_car(0), Ok(()));
+    assert!(scenario.is_failed(0));
+    assert_eq!(scenario.fail_car(0), Err(CarError::WrongState));
+    assert_eq!(scenario.fail_car(CARS), Err(CarError::NoSuchCar));
+    assert!(!scenario.is_failed(1));
+}
+
+#[test]
+fn only_a_failed_car_can_be_recovered() {
+    let mut scenario = Scenario::new();
+    assert_eq!(scenario.recover_car(1), Err(CarError::WrongState));
+    scenario.fail_car(1).ok();
+    assert_eq!(scenario.recover_car(1), Ok(()));
+    assert!(!scenario.is_failed(1));
+    assert_eq!(scenario.recover_car(CARS), Err(CarError::NoSuchCar));
+}
+
+#[test]
+fn a_paused_scenario_does_nothing_until_resumed() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    assert!(scenario.set_paused(true));
+    assert!(scenario.is_paused());
+    assert!(!scenario.set_paused(true));
+    assert_eq!(scenario.step(10), StepEvents::default());
+    assert!(scenario.set_paused(false));
+    assert!(!scenario.is_paused());
+    assert!(!scenario.set_paused(false));
+    assert_eq!(scenario.step(20).assigned, 3);
+}
+
+#[test]
+fn restart_resumes_a_paused_scenario() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    scenario.set_paused(true);
+    scenario.restart(100);
+    assert!(!scenario.is_paused());
+}
+
+#[test]
+fn reset_gives_an_empty_healthy_running_scenario() {
+    let mut scenario = Scenario::new();
+    scenario.restart(0);
+    scenario.fail_car(0).ok();
+    scenario.set_paused(true);
+    assert_eq!(scenario.reset(), Some(()));
+    assert!(!scenario.is_failed(0));
+    assert!(!scenario.is_paused());
+    assert_eq!(scenario.step(10), StepEvents::default());
+    assert!(matches!(
+        scenario.press(call(3, Direction::Down), 20),
+        Ok(Press::Created(_))
+    ));
 }
