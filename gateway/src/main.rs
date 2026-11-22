@@ -1,10 +1,12 @@
-use std::io::{BufRead, Read, Write};
+use std::io::{self, BufRead, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use elevator_gateway::link::supervise;
 use elevator_gateway::{Gateway, Journal, OriginPolicy};
+use serialport::SerialPort;
 
 const DEFAULT_PORT: &str = "/dev/ttyACM0";
 const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
@@ -55,6 +57,17 @@ fn parse_options() -> Options {
     options
 }
 
+type Port = Box<dyn SerialPort>;
+
+fn open_port(path: &str) -> io::Result<(Port, Port)> {
+    let port = serialport::new(path, BAUD)
+        .timeout(Duration::from_millis(100))
+        .open()
+        .map_err(io::Error::other)?;
+    let writer = port.try_clone().map_err(io::Error::other)?;
+    Ok((port, writer))
+}
+
 fn die(message: &str) -> ! {
     eprintln!("{message}");
     std::process::exit(1);
@@ -62,14 +75,6 @@ fn die(message: &str) -> ! {
 
 fn main() {
     let options = parse_options();
-    let port = serialport::new(&options.port, BAUD)
-        .timeout(Duration::from_millis(100))
-        .open()
-        .unwrap_or_else(|error| die(&format!("cannot open {}: {error}", options.port)));
-    let writer = port
-        .try_clone()
-        .unwrap_or_else(|error| die(&format!("cannot clone {}: {error}", options.port)));
-    let mut reader = port;
     let mut journal = Journal::new(options.journal_size);
     if let Some(path) = &options.journal_file {
         let file = std::fs::OpenOptions::new()
@@ -80,7 +85,7 @@ fn main() {
         journal = journal.with_sink(Box::new(file));
     }
     let gateway = Gateway::with_journal(
-        Box::new(writer),
+        Box::new(std::io::sink()),
         OriginPolicy::new(options.origins.clone(), options.allow_no_origin),
         journal,
     );
@@ -94,29 +99,49 @@ fn main() {
     let server = Arc::clone(&gateway);
     thread::spawn(move || server.serve(&listener));
 
-    let incoming = Arc::clone(&gateway);
-    let reading = thread::spawn(move || {
-        let mut buffer = [0_u8; 256];
+    gateway.set_writer(None);
+    let board = Arc::clone(&gateway);
+    let path = options.port.clone();
+    let supervisor = thread::spawn(move || {
+        let mut connected = false;
+        let mut last_error = String::new();
         let stdout = std::io::stdout();
-        loop {
-            let count = match reader.read(&mut buffer) {
-                Ok(count) => count,
-                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
-                Err(error) => {
-                    eprintln!("read failed: {error}");
-                    return;
+        supervise(
+            &board,
+            || {
+                if connected {
+                    eprintln!("board link lost");
+                    connected = false;
                 }
-            };
-            let mut out = stdout.lock();
-            for line in incoming.ingest(&buffer[..count]) {
-                if writeln!(out, "{line}").is_err() {
-                    return;
+                match open_port(&path) {
+                    Ok(pair) => {
+                        eprintln!("board link up on {path}");
+                        connected = true;
+                        last_error.clear();
+                        Ok(pair)
+                    }
+                    Err(error) => {
+                        let text = error.to_string();
+                        if text != last_error {
+                            eprintln!("board link down: {text}");
+                            last_error = text;
+                        }
+                        Err(error)
+                    }
                 }
-            }
-            if out.flush().is_err() {
-                return;
-            }
-        }
+            },
+            thread::sleep,
+            || false,
+            |lines| {
+                let mut out = stdout.lock();
+                for line in lines {
+                    if writeln!(out, "{line}").is_err() {
+                        return;
+                    }
+                }
+                let _ = out.flush();
+            },
+        );
     });
 
     for line in std::io::stdin().lock().lines() {
@@ -125,5 +150,5 @@ fn main() {
             eprintln!("command refused");
         }
     }
-    let _ = reading.join();
+    let _ = supervisor.join();
 }

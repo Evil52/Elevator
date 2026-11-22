@@ -22,7 +22,7 @@ const DEFAULT_JOURNAL: usize = 10_000;
 pub struct Gateway {
     bridge: Mutex<Bridge>,
     hub: Hub,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: Mutex<Option<Box<dyn Write + Send>>>,
     policy: OriginPolicy,
     refused: AtomicU64,
     journal: Mutex<Journal>,
@@ -35,7 +35,7 @@ impl Gateway {
         Arc::new(Self {
             bridge: Mutex::new(Bridge::new()),
             hub: Hub::new(),
-            writer: Mutex::new(writer),
+            writer: Mutex::new(Some(writer)),
             policy,
             refused: AtomicU64::new(0),
             journal: Mutex::new(Journal::new(DEFAULT_JOURNAL)),
@@ -52,7 +52,7 @@ impl Gateway {
         Arc::new(Self {
             bridge: Mutex::new(Bridge::new()),
             hub: Hub::new(),
-            writer: Mutex::new(writer),
+            writer: Mutex::new(Some(writer)),
             policy,
             refused: AtomicU64::new(0),
             journal: Mutex::new(journal),
@@ -97,12 +97,32 @@ impl Gateway {
         }
     }
 
+    pub fn set_writer(&self, writer: Option<Box<dyn Write + Send>>) {
+        if let Ok(mut guard) = self.writer.lock() {
+            *guard = writer;
+        }
+    }
+
+    pub fn board_link(&self, up: bool) {
+        if let Ok(mut journal) = self.journal.lock() {
+            journal.record_link(now_ms(), up);
+        }
+    }
+
+    pub fn reset_stream(&self) {
+        if let Ok(mut bridge) = self.bridge.lock() {
+            bridge.reset_stream();
+        }
+    }
+
     fn send_to_board(&self, bytes: &[u8]) -> bool {
-        self.writer.lock().is_ok_and(|mut writer| {
-            writer
-                .write_all(bytes)
-                .and_then(|()| writer.flush())
-                .is_ok()
+        self.writer.lock().is_ok_and(|mut guard| {
+            guard.as_mut().is_some_and(|writer| {
+                writer
+                    .write_all(bytes)
+                    .and_then(|()| writer.flush())
+                    .is_ok()
+            })
         })
     }
 
