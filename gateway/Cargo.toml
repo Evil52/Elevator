@@ -1,0 +1,13 @@
+[package]
+name = "elevator-gateway"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+elevator-wire = { version = "0.1.0", path = "../crates/elevator-wire" }
+serde_json = "1.0.154"
+serialport = { version = "4.10.1", default-features = false }
+tungstenite = "0.30.0"
+
+[lints]
+workspace = true
