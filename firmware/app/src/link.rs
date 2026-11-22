@@ -45,12 +45,15 @@ pub async fn transmit(mut tx: UartTx<'static, Async>, mut telemetry: Telemetry, 
 }
 
 #[embassy_executor::task]
-pub async fn receive(mut rx: UartRx<'static, Async>) {
+pub async fn receive(rx: UartRx<'static, Async>) {
+    let mut ring = [0_u8; 128];
+    let mut rx = rx.into_ring_buffered(&mut ring);
+    rx.start_uart();
     let mut chunk = [0_u8; 64];
     let mut payload = [0_u8; MAX_PAYLOAD];
     let mut decoder = Decoder::new();
     loop {
-        let Ok(count) = rx.read_until_idle(&mut chunk).await else {
+        let Ok(count) = rx.read(&mut chunk).await else {
             decoder = Decoder::new();
             continue;
         };
