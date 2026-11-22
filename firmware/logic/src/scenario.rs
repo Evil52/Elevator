@@ -1,6 +1,8 @@
+use elevator_ctrl::calls::{Press, Rejection};
 use elevator_ctrl::dispatcher::{CarInput, Dispatcher, Event};
 use elevator_ctrl::eta::{Building, Call, CarMode, CarState, Direction, DoorTimes, EtaParams};
 use elevator_ctrl::motion::MotionParams;
+use elevator_wire::protocol::{CarMode as WireMode, CarSnapshot, DoorState, JSON_SAFE_MAX};
 
 pub const FLOORS: usize = 10;
 pub const CARS: usize = 3;
@@ -10,6 +12,18 @@ const FLOOR_HEIGHT_MM: u32 = 3000;
 const CAR_FLOORS: [u32; CARS] = [1, 5, 10];
 
 type Core = Dispatcher<FLOORS, CARS, CALLS>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PressError {
+    NotRunning,
+    Call(Rejection),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StepEvents {
+    pub assigned: usize,
+    pub requeued: usize,
+}
 
 pub struct Scenario {
     dispatcher: Option<Core>,
@@ -54,6 +68,24 @@ impl Scenario {
     }
 
     pub fn restart(&mut self, now_ms: u64) -> Option<usize> {
+        self.cars = CAR_FLOORS.map(idle_car);
+        self.reload(now_ms)
+    }
+
+    pub fn start_empty(&mut self) -> Option<()> {
+        self.dispatcher = Some(Core::new(eta_params()?)?);
+        Some(())
+    }
+
+    pub fn press(&mut self, call: Call, now_ms: u64) -> Result<Press, PressError> {
+        self.dispatcher
+            .as_mut()
+            .ok_or(PressError::NotRunning)?
+            .press(call, now_ms)
+            .map_err(PressError::Call)
+    }
+
+    pub fn reload(&mut self, now_ms: u64) -> Option<usize> {
         let mut dispatcher = Core::new(eta_params()?)?;
         let mut accepted = 0;
         for floor in 1..=9_u8 {
@@ -74,14 +106,68 @@ impl Scenario {
         Some(accepted)
     }
 
-    pub fn step(&mut self, now_ms: u64) -> usize {
-        let mut assigned = 0;
+    pub fn step(&mut self, now_ms: u64) -> StepEvents {
+        let mut events = StepEvents::default();
         if let Some(dispatcher) = self.dispatcher.as_mut() {
             dispatcher.step(now_ms, &self.cars, |event| {
-                assigned += usize::from(matches!(event, Event::Assigned(_)));
+                events.assigned += usize::from(matches!(event, Event::Assigned(_)));
+                events.requeued += usize::from(matches!(event, Event::Requeued { .. }));
             });
         }
-        assigned
+        events
+    }
+
+    pub fn toggle_failure(&mut self, car: usize) -> bool {
+        let Some(input) = self.cars.get_mut(car) else {
+            return false;
+        };
+        input.state.mode = if input.state.mode == CarMode::Unavailable {
+            CarMode::Normal
+        } else {
+            CarMode::Unavailable
+        };
+        input.state.mode == CarMode::Unavailable
+    }
+
+    #[must_use]
+    pub fn car_snapshot(&self, car: usize, now_ms: u64) -> Option<CarSnapshot> {
+        let state = self.cars.get(car)?.state;
+        let on_floor = state.position_mm % FLOOR_HEIGHT_MM == 0;
+        let floor = on_floor
+            .then(|| u8::try_from(state.position_mm / FLOOR_HEIGHT_MM + 1).ok())
+            .flatten();
+        let speed = i32::try_from(state.speed_mm_s).unwrap_or(i32::MAX);
+        Some(CarSnapshot {
+            car: u8::try_from(car).ok()?,
+            mode: match state.mode {
+                CarMode::Normal => WireMode::Normal,
+                CarMode::FireRecall => WireMode::FireRecall,
+                CarMode::Firefighters => WireMode::Firefighters,
+                CarMode::Unavailable => WireMode::Unavailable,
+            },
+            doors: if state.door_remaining_ms == 0 {
+                DoorState::Closed
+            } else {
+                DoorState::Open
+            },
+            floor,
+            position_mm: state.position_mm,
+            speed_mm_per_sec: match state.heading {
+                Direction::Up => speed,
+                Direction::Down => -speed,
+            },
+            eta_ms: None,
+            up_calls: state.up_calls,
+            down_calls: state.down_calls,
+            model_time_ms: now_ms.min(JSON_SAFE_MAX),
+        })
+    }
+
+    #[must_use]
+    pub fn is_failed(&self, car: usize) -> bool {
+        self.cars
+            .get(car)
+            .is_some_and(|input| input.state.mode == CarMode::Unavailable)
     }
 }
 

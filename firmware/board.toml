@@ -43,6 +43,7 @@ active = "high"
 [pins.b1]
 pin = "PC13"
 role = "user button"
+active = "high"
 
 [pins.usart3_tx]
 pin = "PD8"
