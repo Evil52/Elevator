@@ -168,6 +168,8 @@ async fn main(low_spawner: Spawner) {
     let device_id = fold_uid(embassy_stm32::uid::uid());
     info!("boot id {} device id {}", boot_id, device_id);
     link::BOOT_ID.store(boot_id, core::sync::atomic::Ordering::Relaxed);
+    let mut uart_config = UartConfig::default();
+    uart_config.eager_reads = Some(1);
     let uart = Uart::new(
         p.USART3,
         p.PD9,
@@ -175,7 +177,7 @@ async fn main(low_spawner: Spawner) {
         p.DMA1_CH3,
         p.DMA1_CH1,
         irq::Irqs,
-        UartConfig::default(),
+        uart_config,
     );
     let b1 = Input::new(p.PC13, Pull::None);
     interrupt::UART4.set_priority(Priority::P6);
