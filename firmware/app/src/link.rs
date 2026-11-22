@@ -3,9 +3,11 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use elevator_fw_logic::reset::ResetCause;
 use elevator_fw_logic::scenario::CARS;
 use elevator_fw_logic::telemetry::Telemetry;
-use elevator_wire::protocol::{CarSnapshot, CommandResult, Envelope, decode_message};
+use elevator_wire::protocol::{
+    AlarmPage, CarSnapshot, CommandResult, Envelope, EventLogChunk, decode_message,
+};
 use elevator_wire::{Decoder, MAX_FRAME, MAX_PAYLOAD};
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either4, select4};
 use embassy_stm32::mode::Async;
 use embassy_stm32::usart::{UartRx, UartTx};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -15,6 +17,8 @@ use embassy_sync::signal::Signal;
 pub static SNAPSHOTS: Signal<CriticalSectionRawMutex, [Option<CarSnapshot>; CARS]> = Signal::new();
 pub static COMMANDS: Channel<CriticalSectionRawMutex, Envelope, 4> = Channel::new();
 pub static REPLIES: Channel<CriticalSectionRawMutex, CommandResult, 4> = Channel::new();
+pub static ALARM_PAGES: Signal<CriticalSectionRawMutex, [AlarmPage; 2]> = Signal::new();
+pub static LOG_CHUNKS: Channel<CriticalSectionRawMutex, EventLogChunk, 2> = Channel::new();
 pub static BOOT_ID: AtomicU32 = AtomicU32::new(0);
 pub static RUN_ID: AtomicU32 = AtomicU32::new(1);
 
@@ -25,18 +29,39 @@ pub async fn transmit(mut tx: UartTx<'static, Async>, mut telemetry: Telemetry, 
         let _ = tx.write(&frame[..length]).await;
     }
     loop {
-        let event = select(SNAPSHOTS.wait(), REPLIES.receive()).await;
+        let event = select4(
+            SNAPSHOTS.wait(),
+            REPLIES.receive(),
+            ALARM_PAGES.wait(),
+            LOG_CHUNKS.receive(),
+        )
+        .await;
         telemetry.set_run(RUN_ID.load(Ordering::Relaxed));
         match event {
-            Either::First(snapshots) => {
+            Either4::First(snapshots) => {
                 for snapshot in snapshots.into_iter().flatten() {
                     if let Ok(length) = telemetry.car_snapshot(snapshot, &mut frame) {
                         let _ = tx.write(&frame[..length]).await;
                     }
                 }
             }
-            Either::Second(result) => {
+            Either4::Second(result) => {
                 if let Ok(length) = telemetry.command_result(result, &mut frame) {
+                    let _ = tx.write(&frame[..length]).await;
+                }
+            }
+            Either4::Third(pages) => {
+                for (index, page) in pages.into_iter().enumerate() {
+                    if index > 0 && page.items.iter().all(Option::is_none) {
+                        break;
+                    }
+                    if let Ok(length) = telemetry.alarm_page(page, &mut frame) {
+                        let _ = tx.write(&frame[..length]).await;
+                    }
+                }
+            }
+            Either4::Fourth(chunk) => {
+                if let Ok(length) = telemetry.log_chunk(chunk, &mut frame) {
                     let _ = tx.write(&frame[..length]).await;
                 }
             }

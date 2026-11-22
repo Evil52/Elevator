@@ -2,8 +2,10 @@
 
 use core::num::NonZeroU32;
 
+pub mod alarms;
 pub mod button;
 pub mod commands;
+pub mod events;
 pub mod progress;
 pub mod reset;
 pub mod scenario;

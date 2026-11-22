@@ -1,8 +1,9 @@
-use elevator_fw_logic::commands::execute;
+use elevator_fw_logic::commands::{Reply, answer, execute};
 use elevator_fw_logic::scenario::{Scenario, StepEvents};
 use elevator_wire::protocol::{
-    AckAlarm, CallFloor, CommandResult, CommandStatus, Direction, Envelope, Hello, InjectFault,
-    Message, PROTOCOL_VERSION, RecoverCar, Rejection, ResetReason, SimAction, SimControl,
+    AckAlarm, CallFloor, CommandResult, CommandStatus, Direction, Envelope, EventKind, Hello,
+    InjectFault, Message, PROTOCOL_VERSION, ReadLog, RecoverCar, Rejection, ResetReason, SimAction,
+    SimControl,
 };
 
 const BOOT: u32 = 77;
@@ -320,4 +321,93 @@ fn acknowledging_an_alarm_finds_no_alarm_yet() {
         run(&mut scenario, ack),
         reply(8, CommandStatus::Rejected(Rejection::NoSuchAlarm))
     );
+}
+
+fn ack(request_id: u32, alarm_id: u32) -> Message {
+    Message::AckAlarm(AckAlarm {
+        request_id,
+        alarm_id,
+    })
+}
+
+#[test]
+fn acknowledging_a_real_alarm_is_applied_once() {
+    let mut scenario = running();
+    run(&mut scenario, inject(1, 0));
+    assert_eq!(
+        run(&mut scenario, ack(2, 1)),
+        reply(2, CommandStatus::Applied)
+    );
+    assert_eq!(
+        run(&mut scenario, ack(3, 1)),
+        reply(3, CommandStatus::Rejected(Rejection::WrongState))
+    );
+    assert_eq!(
+        run(&mut scenario, ack(4, 99)),
+        reply(4, CommandStatus::Rejected(Rejection::NoSuchAlarm))
+    );
+}
+
+fn ask(scenario: &mut Scenario, boot: u32, run_id: u32, message: Message) -> Option<Reply> {
+    answer(BOOT, RUN, &envelope(boot, run_id, message), scenario, 0)
+}
+
+#[test]
+fn reading_the_log_returns_a_chunk_from_the_requested_index() {
+    let mut scenario = running();
+    scenario.fail_car(0).ok();
+    scenario.recover_car(0).ok();
+    let read = Message::ReadLog(ReadLog {
+        request_id: 5,
+        from_index: 1,
+    });
+    let Some(Reply::Log(chunk)) = ask(&mut scenario, BOOT, RUN, read) else {
+        panic!("expected a log chunk");
+    };
+    assert_eq!(chunk.first_index, 1);
+    assert_eq!(
+        chunk.events[0].map(|event| event.kind),
+        Some(EventKind::AlarmCleared)
+    );
+    assert_eq!(chunk.events[1], None);
+}
+
+#[test]
+fn reading_the_log_checks_the_boot_and_the_run() {
+    let mut scenario = running();
+    let read = Message::ReadLog(ReadLog {
+        request_id: 6,
+        from_index: 0,
+    });
+    assert_eq!(
+        ask(&mut scenario, BOOT + 1, RUN, read),
+        Some(Reply::Result(CommandResult {
+            request_id: 6,
+            status: CommandStatus::Rejected(Rejection::WrongBoot)
+        }))
+    );
+    assert_eq!(
+        ask(&mut scenario, BOOT, RUN + 1, read),
+        Some(Reply::Result(CommandResult {
+            request_id: 6,
+            status: CommandStatus::Rejected(Rejection::WrongRun)
+        }))
+    );
+}
+
+#[test]
+fn other_commands_are_answered_with_a_result() {
+    let mut scenario = running();
+    assert_eq!(
+        ask(&mut scenario, BOOT, RUN, inject(7, 0)),
+        Some(Reply::Result(CommandResult {
+            request_id: 7,
+            status: CommandStatus::Applied
+        }))
+    );
+    let hello = Message::Hello(Hello {
+        device_id: 1,
+        reset_reason: ResetReason::PowerOn,
+    });
+    assert_eq!(ask(&mut scenario, BOOT, RUN, hello), None);
 }

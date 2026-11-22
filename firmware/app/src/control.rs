@@ -6,7 +6,7 @@ use cortex_m::peripheral::DWT;
 use core::sync::atomic::Ordering;
 
 use elevator_fw_logic::button::{Button, ButtonEvent};
-use elevator_fw_logic::commands::execute;
+use elevator_fw_logic::commands::{Reply, answer};
 use elevator_fw_logic::progress::ProgressMonitor;
 use elevator_fw_logic::scenario::{CARS, Scenario};
 use elevator_fw_logic::{JitterReport, JitterStats, led_on};
@@ -76,6 +76,7 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
     fresh(&mut scenario, start.as_millis());
     let mut deadline = start + period;
     let mut report_at = start + REPORT_EVERY;
+    let mut published_alarms = scenario.alarm_version().wrapping_add(1);
     loop {
         Timer::at(deadline).await;
         PROGRESS.lock(|monitor| monitor.borrow_mut().progress(TASK_CONTROL));
@@ -101,19 +102,29 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
             BUTTON.signal((event, failed));
         }
         while let Ok(envelope) = crate::link::COMMANDS.try_receive() {
-            let reply = execute(
+            let reply = answer(
                 crate::link::BOOT_ID.load(Ordering::Relaxed),
                 crate::link::RUN_ID.load(Ordering::Relaxed),
                 &envelope,
                 &mut scenario,
                 deadline.as_millis(),
             );
-            if let Some(reply) = reply {
-                if resets_run(&envelope, &reply) {
-                    crate::link::RUN_ID.fetch_add(1, Ordering::Relaxed);
+            match reply {
+                Some(Reply::Result(result)) => {
+                    if resets_run(&envelope, &result) {
+                        crate::link::RUN_ID.fetch_add(1, Ordering::Relaxed);
+                    }
+                    let _ = crate::link::REPLIES.try_send(result);
                 }
-                let _ = crate::link::REPLIES.try_send(reply);
+                Some(Reply::Log(chunk)) => {
+                    let _ = crate::link::LOG_CHUNKS.try_send(chunk);
+                }
+                None => {}
             }
+        }
+        if scenario.alarm_version() != published_alarms {
+            published_alarms = scenario.alarm_version();
+            crate::link::ALARM_PAGES.signal([scenario.alarm_page(0), scenario.alarm_page(8)]);
         }
         let began = DWT::cycle_count();
         scenario.step(deadline.as_millis());

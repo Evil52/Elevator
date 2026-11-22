@@ -1,8 +1,9 @@
 use elevator_fw_logic::reset::ResetCause;
 use elevator_fw_logic::telemetry::{Telemetry, reset_reason};
 use elevator_wire::protocol::{
-    CarMode, CarSnapshot, CommandResult, CommandStatus, DoorState, Envelope, Message,
-    PROTOCOL_VERSION, ResetReason, decode_message,
+    Alarm, AlarmKind, AlarmPage, AlarmState, CarMode, CarSnapshot, CommandResult, CommandStatus,
+    DoorState, Envelope, Event, EventKind, EventLogChunk, Message, PROTOCOL_VERSION, ResetReason,
+    decode_message,
 };
 use elevator_wire::{MAX_FRAME, MAX_PAYLOAD, decode_frame};
 
@@ -186,4 +187,62 @@ fn set_run_replaces_the_run_id_without_touching_the_counters() {
         .expect("snapshot");
     let (frame_seq, envelope) = open(&out[..len]).expect("open");
     assert_eq!((envelope.run_id, envelope.seq, frame_seq), (9, 1, 1));
+}
+
+#[test]
+fn an_alarm_page_round_trips_even_when_full_of_large_values() {
+    let mut telemetry = Telemetry::new(DEVICE, BOOT);
+    let mut out = [0_u8; MAX_FRAME];
+    let alarm = |id: u32| Alarm {
+        id: u32::MAX - id,
+        kind: AlarmKind::CarFault,
+        car: Some(255),
+        state: AlarmState::Acknowledged,
+        raised_at_ms: (1 << 53) - 1,
+    };
+    let page = AlarmPage {
+        total: 8,
+        offset: 0,
+        items: core::array::from_fn(|i| Some(alarm(u32::try_from(i).expect("small")))),
+    };
+    let len = telemetry.alarm_page(page, &mut out).expect("page");
+    let (_, envelope) = open(&out[..len]).expect("open");
+    assert_eq!(envelope.message, Message::AlarmPage(page));
+}
+
+#[test]
+fn a_full_log_chunk_round_trips() {
+    let mut telemetry = Telemetry::new(DEVICE, BOOT);
+    let mut out = [0_u8; MAX_FRAME];
+    let event = |i: u32| Event {
+        index: 4_000_000_000 + i,
+        at_ms: (1 << 53) - 1,
+        kind: EventKind::AlarmCleared,
+        car: Some(255),
+        id: u32::MAX,
+    };
+    let chunk = EventLogChunk {
+        first_index: 4_000_000_000,
+        dropped_before: u32::MAX,
+        events: core::array::from_fn(|i| Some(event(u32::try_from(i).expect("small")))),
+    };
+    let len = telemetry.log_chunk(chunk, &mut out).expect("chunk");
+    let (_, envelope) = open(&out[..len]).expect("open");
+    assert_eq!(envelope.message, Message::EventLogChunk(chunk));
+}
+
+#[test]
+fn an_inconsistent_page_is_refused_and_consumes_no_number() {
+    let mut telemetry = Telemetry::new(DEVICE, BOOT);
+    let mut out = [0_u8; MAX_FRAME];
+    let bad = AlarmPage {
+        total: 0,
+        offset: 5,
+        items: [None; 8],
+    };
+    assert!(telemetry.alarm_page(bad, &mut out).is_err());
+    let len = telemetry
+        .car_snapshot(snapshot(0), &mut out)
+        .expect("snapshot");
+    assert_eq!(open(&out[..len]).expect("open").1.seq, 0);
 }

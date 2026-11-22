@@ -1,6 +1,6 @@
 use elevator_wire::protocol::{
-    CarSnapshot, CommandResult, Envelope, Hello, Message, PROTOCOL_VERSION, ResetReason,
-    encode_message,
+    AlarmPage, CarSnapshot, CommandResult, Envelope, EventLogChunk, Hello, Message,
+    PROTOCOL_VERSION, ResetReason, encode_message,
 };
 use elevator_wire::{MAX_FRAME, MAX_PAYLOAD, encode_frame};
 
@@ -82,6 +82,22 @@ impl Telemetry {
     #[must_use]
     pub const fn run_id(&self) -> u32 {
         self.run_id
+    }
+
+    pub fn alarm_page(
+        &mut self,
+        page: AlarmPage,
+        out: &mut [u8; MAX_FRAME],
+    ) -> Result<usize, LinkError> {
+        self.emit(Message::AlarmPage(page), out)
+    }
+
+    pub fn log_chunk(
+        &mut self,
+        chunk: EventLogChunk,
+        out: &mut [u8; MAX_FRAME],
+    ) -> Result<usize, LinkError> {
+        self.emit(Message::EventLogChunk(chunk), out)
     }
 
     pub fn command_result(
