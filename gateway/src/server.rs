@@ -9,11 +9,15 @@ use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::StatusCode;
 use tungstenite::{Error, Message, accept_hdr};
 
+use elevator_wire::protocol::Envelope;
+
 use crate::hub::Hub;
+use crate::journal::{Direction, Journal};
 use crate::origin::OriginPolicy;
-use crate::{Bridge, Stats, to_json};
+use crate::{Bridge, CommandError, Stats, to_json};
 
 const READ_SLICE: Duration = Duration::from_millis(50);
+const DEFAULT_JOURNAL: usize = 10_000;
 
 pub struct Gateway {
     bridge: Mutex<Bridge>,
@@ -21,6 +25,8 @@ pub struct Gateway {
     writer: Mutex<Box<dyn Write + Send>>,
     policy: OriginPolicy,
     refused: AtomicU64,
+    journal: Mutex<Journal>,
+    sessions: AtomicU64,
 }
 
 impl Gateway {
@@ -32,6 +38,71 @@ impl Gateway {
             writer: Mutex::new(writer),
             policy,
             refused: AtomicU64::new(0),
+            journal: Mutex::new(Journal::new(DEFAULT_JOURNAL)),
+            sessions: AtomicU64::new(0),
+        })
+    }
+
+    #[must_use]
+    pub fn with_journal(
+        writer: Box<dyn Write + Send>,
+        policy: OriginPolicy,
+        journal: Journal,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            bridge: Mutex::new(Bridge::new()),
+            hub: Hub::new(),
+            writer: Mutex::new(writer),
+            policy,
+            refused: AtomicU64::new(0),
+            journal: Mutex::new(journal),
+            sessions: AtomicU64::new(0),
+        })
+    }
+
+    #[must_use]
+    pub fn export_journal(&self) -> String {
+        self.journal
+            .lock()
+            .map_or_else(|_| String::new(), |journal| journal.export(now_ms()))
+    }
+
+    pub fn command_from(&self, session: u64, json: &str) -> bool {
+        let frame = match self.bridge.lock() {
+            Ok(mut bridge) => bridge.command_frame(json),
+            Err(_) => return false,
+        };
+        let outcome = match frame {
+            Ok(bytes) if self.send_to_board(&bytes) => Ok(()),
+            Ok(_) => Err("serial"),
+            Err(error) => Err(refusal_reason(&error)),
+        };
+        let now = now_ms();
+        match outcome {
+            Ok(()) => {
+                if let (Ok(envelope), Ok(mut journal)) =
+                    (serde_json::from_str::<Envelope>(json), self.journal.lock())
+                {
+                    journal.record(now, Direction::Tx, Some(session), &envelope);
+                }
+                true
+            }
+            Err(reason) => {
+                self.refused.fetch_add(1, Ordering::Relaxed);
+                if let Ok(mut journal) = self.journal.lock() {
+                    journal.record_refusal(now, session, reason);
+                }
+                false
+            }
+        }
+    }
+
+    fn send_to_board(&self, bytes: &[u8]) -> bool {
+        self.writer.lock().is_ok_and(|mut writer| {
+            writer
+                .write_all(bytes)
+                .and_then(|()| writer.flush())
+                .is_ok()
         })
     }
 
@@ -41,7 +112,11 @@ impl Gateway {
             Err(_) => return Vec::new(),
         };
         let mut lines = Vec::new();
+        let now = now_ms();
         for envelope in &envelopes {
+            if let Ok(mut journal) = self.journal.lock() {
+                journal.record(now, Direction::Rx, None, envelope);
+            }
             if let Ok(line) = to_json(envelope) {
                 self.hub.publish(envelope, &line);
                 lines.push(line);
@@ -51,22 +126,7 @@ impl Gateway {
     }
 
     pub fn command(&self, json: &str) -> bool {
-        let frame = match self.bridge.lock() {
-            Ok(mut bridge) => bridge.command_frame(json),
-            Err(_) => return false,
-        };
-        let sent = frame.is_ok_and(|bytes| {
-            self.writer.lock().is_ok_and(|mut writer| {
-                writer
-                    .write_all(&bytes)
-                    .and_then(|()| writer.flush())
-                    .is_ok()
-            })
-        });
-        if !sent {
-            self.refused.fetch_add(1, Ordering::Relaxed);
-        }
-        sent
+        self.command_from(0, json)
     }
 
     pub fn serve(self: &Arc<Self>, listener: &TcpListener) {
@@ -119,6 +179,7 @@ impl Gateway {
         if socket.get_mut().set_read_timeout(Some(READ_SLICE)).is_err() {
             return;
         }
+        let session = self.sessions.fetch_add(1, Ordering::Relaxed) + 1;
         let (replay, live) = self.hub.subscribe();
         for line in replay {
             if socket.send(Message::text(line)).is_err() {
@@ -128,7 +189,7 @@ impl Gateway {
         loop {
             match socket.read() {
                 Ok(Message::Text(text)) => {
-                    self.command(text.as_str());
+                    self.command_from(session, text.as_str());
                 }
                 Ok(Message::Close(_)) => break,
                 Ok(_) => {}
@@ -146,5 +207,22 @@ impl Gateway {
             }
         }
         let _ = socket.close(None);
+    }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
+const fn refusal_reason(error: &CommandError) -> &'static str {
+    match error {
+        CommandError::Json(_) => "json",
+        CommandError::NotACommand => "notACommand",
+        CommandError::Message(_) => "invalid",
+        CommandError::Frame => "frame",
     }
 }

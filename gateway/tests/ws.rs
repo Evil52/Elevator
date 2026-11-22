@@ -234,3 +234,26 @@ fn an_origin_header_that_is_not_readable_text_is_refused() {
     assert!(connect(request).is_err());
     assert_eq!(gateway.clients(), 0);
 }
+
+#[test]
+fn every_websocket_client_gets_its_own_session_number_in_the_journal() {
+    let (gateway, addr, _) = start(false);
+    let mut first = connect_with(addr, Some(ORIGIN)).expect("connect");
+    let mut second = connect_with(addr, Some(ORIGIN)).expect("connect");
+    first
+        .send(tungstenite::Message::text(call_json()))
+        .expect("send");
+    second
+        .send(tungstenite::Message::text(call_json()))
+        .expect("send");
+    assert!(wait_until(|| gateway.export_journal().lines().count() >= 3));
+    let sessions: std::collections::BTreeSet<u64> = gateway
+        .export_journal()
+        .lines()
+        .skip(1)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|entry| entry["session"].as_u64())
+        .collect();
+    assert_eq!(sessions.len(), 2);
+    assert!(!sessions.contains(&0));
+}

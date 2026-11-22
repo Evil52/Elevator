@@ -4,18 +4,21 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use elevator_gateway::{Gateway, OriginPolicy};
+use elevator_gateway::{Gateway, Journal, OriginPolicy};
 
 const DEFAULT_PORT: &str = "/dev/ttyACM0";
 const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
 const DEFAULT_ORIGIN: &str = "http://localhost:5173";
 const BAUD: u32 = 115_200;
+const DEFAULT_JOURNAL_SIZE: usize = 10_000;
 
 struct Options {
     port: String,
     listen: String,
     origins: Vec<String>,
     allow_no_origin: bool,
+    journal_file: Option<String>,
+    journal_size: usize,
 }
 
 fn parse_options() -> Options {
@@ -24,6 +27,8 @@ fn parse_options() -> Options {
         listen: DEFAULT_LISTEN.to_owned(),
         origins: Vec::new(),
         allow_no_origin: false,
+        journal_file: None,
+        journal_size: DEFAULT_JOURNAL_SIZE,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -35,6 +40,12 @@ fn parse_options() -> Options {
                 }
             }
             "--allow-no-origin" => options.allow_no_origin = true,
+            "--journal" => options.journal_file = args.next(),
+            "--journal-size" => {
+                if let Some(size) = args.next().and_then(|text| text.parse().ok()) {
+                    options.journal_size = size;
+                }
+            }
             _ => options.port = arg,
         }
     }
@@ -59,9 +70,19 @@ fn main() {
         .try_clone()
         .unwrap_or_else(|error| die(&format!("cannot clone {}: {error}", options.port)));
     let mut reader = port;
-    let gateway = Gateway::new(
+    let mut journal = Journal::new(options.journal_size);
+    if let Some(path) = &options.journal_file {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap_or_else(|error| die(&format!("cannot open journal {path}: {error}")));
+        journal = journal.with_sink(Box::new(file));
+    }
+    let gateway = Gateway::with_journal(
         Box::new(writer),
         OriginPolicy::new(options.origins.clone(), options.allow_no_origin),
+        journal,
     );
 
     let listener = TcpListener::bind(&options.listen)
