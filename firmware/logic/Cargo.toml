@@ -8,3 +8,4 @@ workspace = true
 
 [dependencies]
 elevator-ctrl = { path = "../../crates/elevator-ctrl" }
+elevator-wire = { path = "../../crates/elevator-wire" }

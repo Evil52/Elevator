@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 elevator-fw-logic = { path = "../logic" }
+elevator-wire = { path = "../../crates/elevator-wire" }
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.7"
 defmt = "1.2.0"

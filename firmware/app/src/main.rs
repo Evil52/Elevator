@@ -3,20 +3,25 @@
 
 mod control;
 mod irq;
+mod link;
 
 use defmt::{error, info, warn};
 use defmt_rtt as _;
 use elevator_fw_logic::button::ButtonEvent;
 use elevator_fw_logic::progress::Verdict;
 use elevator_fw_logic::reset::{ResetCause, ResetFlags, reset_cause};
+use elevator_fw_logic::telemetry::Telemetry;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::interrupt::{self, InterruptExt, Priority};
 use embassy_stm32::peripherals::IWDG;
 use embassy_stm32::rcc::{
-    AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllMul, PllPDiv, PllPreDiv, PllSource, Sysclk,
+    AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllMul, PllPDiv, PllPreDiv, PllQDiv, PllSource,
+    Sysclk,
 };
+use embassy_stm32::rng::Rng;
 use embassy_stm32::time::Hertz;
+use embassy_stm32::usart::{Config as UartConfig, UartTx};
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_time::{Duration, Ticker};
 use panic_probe as _;
@@ -32,7 +37,7 @@ fn clock_config() -> embassy_stm32::Config {
         prediv: PllPreDiv::DIV4,
         mul: PllMul::MUL180,
         divp: Some(PllPDiv::DIV2),
-        divq: None,
+        divq: Some(PllQDiv::DIV8),
         divr: None,
     });
     config.rcc.sys = Sysclk::PLL1_P;
@@ -93,6 +98,13 @@ const fn cause_name(cause: ResetCause) -> &'static str {
     }
 }
 
+fn fold_uid(uid: [u8; 12]) -> u32 {
+    let (words, _) = uid.as_chunks::<4>();
+    words
+        .iter()
+        .fold(0, |acc, word| acc ^ u32::from_le_bytes(*word))
+}
+
 #[embassy_executor::task]
 async fn watchdog(mut iwdg: IndependentWatchdog<'static, IWDG>) {
     iwdg.unleash();
@@ -137,6 +149,22 @@ async fn main(low_spawner: Spawner) {
     core.DWT.enable_cycle_counter();
     let led = Output::new(p.PB0, Level::Low, Speed::Low);
     info!("reset cause: {}", cause_name(cause));
+    let mut rng = Rng::new(p.RNG, irq::Irqs);
+    let mut random = [0_u8; 4];
+    let boot_id = if rng.async_fill_bytes(&mut random).await.is_ok() {
+        u32::from_le_bytes(random)
+    } else {
+        0
+    };
+    let device_id = fold_uid(embassy_stm32::uid::uid());
+    info!("boot id {} device id {}", boot_id, device_id);
+    let tx = UartTx::new(
+        p.USART3,
+        p.PD8,
+        p.DMA1_CH3,
+        irq::Irqs,
+        UartConfig::default(),
+    );
     let b1 = Input::new(p.PC13, Pull::None);
     interrupt::UART4.set_priority(Priority::P6);
     let high_spawner = irq::CONTROL_EXECUTOR.start(interrupt::UART4);
@@ -144,6 +172,15 @@ async fn main(low_spawner: Spawner) {
         high_spawner.spawn(token);
     } else {
         error!("control task did not start");
+    }
+    if let Ok(tx) = tx {
+        if let Ok(token) = link::run(tx, Telemetry::new(device_id, boot_id), cause) {
+            low_spawner.spawn(token);
+        } else {
+            error!("link task did not start");
+        }
+    } else {
+        error!("usart3 did not start");
     }
     if let Ok(token) = watchdog(IndependentWatchdog::new(p.IWDG, WATCHDOG_TIMEOUT_US)) {
         low_spawner.spawn(token);
