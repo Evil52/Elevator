@@ -85,6 +85,14 @@ fn read_reset_cause() -> ResetCause {
     cause
 }
 
+fn enable_flash_accelerator() {
+    embassy_stm32::pac::FLASH.acr().modify(|w| {
+        w.set_prften(true);
+        w.set_icen(true);
+        w.set_dcen(true);
+    });
+}
+
 const fn cause_name(cause: ResetCause) -> &'static str {
     match cause {
         ResetCause::IndependentWatchdog => "independent watchdog",
@@ -132,6 +140,7 @@ async fn report_button() {
 async fn main(low_spawner: Spawner) {
     let cause = read_reset_cause();
     let p = embassy_stm32::init(clock_config());
+    enable_flash_accelerator();
     let clocks = embassy_stm32::rcc::clocks(&p.RCC);
     info!(
         "boot: sys={} hclk={} pclk1_tim={} control period {} us",
