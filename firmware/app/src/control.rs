@@ -1,10 +1,14 @@
 use core::num::NonZeroU32;
 
+use core::cell::RefCell;
 use cortex_m::peripheral::DWT;
+
 use elevator_fw_logic::button::{Button, ButtonEvent};
+use elevator_fw_logic::progress::ProgressMonitor;
 use elevator_fw_logic::scenario::Scenario;
 use elevator_fw_logic::{JitterReport, JitterStats, led_on};
 use embassy_stm32::gpio::{Input, Level, Output};
+use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
@@ -25,6 +29,12 @@ pub struct Reports {
     pub step_cycles: JitterReport,
 }
 
+pub const TASK_CONTROL: usize = 0;
+pub const MANDATORY_TASKS: usize = 1;
+
+pub static PROGRESS: Mutex<CriticalSectionRawMutex, RefCell<ProgressMonitor<MANDATORY_TASKS>>> =
+    Mutex::new(RefCell::new(ProgressMonitor::new()));
+
 pub static BUTTON: Signal<CriticalSectionRawMutex, (ButtonEvent, bool)> = Signal::new();
 
 pub static REPORT: Signal<CriticalSectionRawMutex, Reports> = Signal::new();
@@ -44,6 +54,7 @@ pub async fn run(mut led: Output<'static>, b1: Input<'static>, cycles_per_us: u3
     let mut report_at = start + REPORT_EVERY;
     loop {
         Timer::at(deadline).await;
+        PROGRESS.lock(|monitor| monitor.borrow_mut().progress(TASK_CONTROL));
         let now = Instant::now();
         let late_us = now
             .checked_duration_since(deadline)

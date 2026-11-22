@@ -4,6 +4,7 @@ use core::num::NonZeroU32;
 
 pub mod button;
 pub mod progress;
+pub mod reset;
 pub mod scenario;
 
 #[must_use]

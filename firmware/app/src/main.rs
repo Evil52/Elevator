@@ -4,16 +4,21 @@
 mod control;
 mod irq;
 
-use defmt::{error, info};
+use defmt::{error, info, warn};
 use defmt_rtt as _;
 use elevator_fw_logic::button::ButtonEvent;
+use elevator_fw_logic::progress::Verdict;
+use elevator_fw_logic::reset::{ResetCause, ResetFlags, reset_cause};
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::interrupt::{self, InterruptExt, Priority};
+use embassy_stm32::peripherals::IWDG;
 use embassy_stm32::rcc::{
     AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllMul, PllPDiv, PllPreDiv, PllSource, Sysclk,
 };
 use embassy_stm32::time::Hertz;
+use embassy_stm32::wdg::IndependentWatchdog;
+use embassy_time::{Duration, Ticker};
 use panic_probe as _;
 
 fn clock_config() -> embassy_stm32::Config {
@@ -56,6 +61,51 @@ async fn report(cycles_per_us: u32) {
     }
 }
 
+const WATCHDOG_TIMEOUT_US: u32 = 1_000_000;
+const WATCHDOG_CHECK: Duration = Duration::from_millis(100);
+
+fn read_reset_cause() -> ResetCause {
+    let rcc = embassy_stm32::pac::RCC;
+    let csr = rcc.csr().read();
+    let cause = reset_cause(ResetFlags {
+        low_power: csr.lpwrrstf(),
+        window_watchdog: csr.wwdgrstf(),
+        independent_watchdog: csr.wdgrstf(),
+        software: csr.sftrstf(),
+        power_on: csr.porrstf(),
+        brown_out: csr.borrstf(),
+        pin: csr.padrstf(),
+    });
+    rcc.csr().modify(|w| w.set_rmvf(true));
+    cause
+}
+
+const fn cause_name(cause: ResetCause) -> &'static str {
+    match cause {
+        ResetCause::IndependentWatchdog => "independent watchdog",
+        ResetCause::WindowWatchdog => "window watchdog",
+        ResetCause::LowPower => "low power",
+        ResetCause::Software => "software",
+        ResetCause::PowerOn => "power on",
+        ResetCause::BrownOut => "brown out",
+        ResetCause::Pin => "pin",
+        ResetCause::Unknown => "unknown",
+    }
+}
+
+#[embassy_executor::task]
+async fn watchdog(mut iwdg: IndependentWatchdog<'static, IWDG>) {
+    iwdg.unleash();
+    let mut ticker = Ticker::every(WATCHDOG_CHECK);
+    loop {
+        ticker.next().await;
+        match control::PROGRESS.lock(|monitor| monitor.borrow_mut().check()) {
+            Verdict::Feed => iwdg.pet(),
+            Verdict::Hold { missing } => warn!("watchdog hold, missing tasks mask {}", missing),
+        }
+    }
+}
+
 #[embassy_executor::task]
 async fn report_button() {
     loop {
@@ -68,6 +118,7 @@ async fn report_button() {
 
 #[embassy_executor::main]
 async fn main(low_spawner: Spawner) {
+    let cause = read_reset_cause();
     let p = embassy_stm32::init(clock_config());
     let clocks = embassy_stm32::rcc::clocks(&p.RCC);
     info!(
@@ -85,6 +136,7 @@ async fn main(low_spawner: Spawner) {
     core.DCB.enable_trace();
     core.DWT.enable_cycle_counter();
     let led = Output::new(p.PB0, Level::Low, Speed::Low);
+    info!("reset cause: {}", cause_name(cause));
     let b1 = Input::new(p.PC13, Pull::None);
     interrupt::UART4.set_priority(Priority::P6);
     let high_spawner = irq::CONTROL_EXECUTOR.start(interrupt::UART4);
@@ -92,6 +144,11 @@ async fn main(low_spawner: Spawner) {
         high_spawner.spawn(token);
     } else {
         error!("control task did not start");
+    }
+    if let Ok(token) = watchdog(IndependentWatchdog::new(p.IWDG, WATCHDOG_TIMEOUT_US)) {
+        low_spawner.spawn(token);
+    } else {
+        error!("watchdog task did not start");
     }
     if let Ok(token) = report_button() {
         low_spawner.spawn(token);
