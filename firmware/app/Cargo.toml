@@ -17,5 +17,8 @@ embassy-futures = "0.1.2"
 embassy-sync = { version = "0.8.0", features = ["defmt"] }
 embassy-stm32 = { version = "0.6.0", features = ["defmt", "stm32f429zi", "time-driver-tim2", "memory-x", "unstable-pac"] }
 
+[features]
+load-test = []
+
 [lints]
 workspace = true
