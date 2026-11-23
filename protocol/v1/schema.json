@@ -595,7 +595,34 @@
           "required": [
             "readLog"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ping": {
+              "$ref": "#/$defs/Ping"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ping"
+          ]
         }
+      ]
+    },
+    "Ping": {
+      "type": "object",
+      "properties": {
+        "counter": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "counter"
       ]
     },
     "ReadLog": {

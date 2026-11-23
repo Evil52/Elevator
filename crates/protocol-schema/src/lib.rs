@@ -1,7 +1,7 @@
 use elevator_wire::protocol::{
     ALARMS_PER_PAGE, AckAlarm, Alarm, AlarmKind, AlarmPage, AlarmState, CallFloor, CarMode,
     CarSnapshot, CommandResult, CommandStatus, Direction, DoorState, EVENTS_PER_CHUNK, Envelope,
-    Event, EventKind, EventLogChunk, Hello, InjectFault, JSON_SAFE_MAX, Message, ReadLog,
+    Event, EventKind, EventLogChunk, Hello, InjectFault, JSON_SAFE_MAX, Message, Ping, ReadLog,
     RecoverCar, Rejection, ResetReason, SimAction, SimControl,
 };
 use schemars::{
@@ -254,6 +254,7 @@ pub fn valid_fixtures() -> Vec<(String, Value)> {
                 from_index: 300,
             }),
         ),
+        ("ping", Message::Ping(Ping { counter: 14 })),
     ];
     cases
         .into_iter()
@@ -326,6 +327,23 @@ fn inconsistent_pages() -> [(&'static str, Value); 8] {
                 chunk["firstIndex"] = json!(u32::MAX);
                 chunk["events"][0]["index"] = json!(u32::MAX);
                 chunk["events"][1]["index"] = json!(0);
+            }),
+        ),
+    ]
+}
+
+fn ping_cases() -> [(&'static str, Value); 2] {
+    [
+        (
+            "ping_counter_over_u32",
+            mutated("ping", |v| {
+                v["message"]["ping"]["counter"] = json!(u64::from(u32::MAX) + 1);
+            }),
+        ),
+        (
+            "ping_missing_counter",
+            mutated("ping", |v| {
+                v["message"]["ping"] = json!({});
             }),
         ),
     ]
@@ -425,6 +443,7 @@ pub fn invalid_fixtures() -> Vec<(String, Value)> {
     cases
         .into_iter()
         .chain(inconsistent_pages())
+        .chain(ping_cases())
         .map(|(name, value)| (name.to_owned(), value))
         .collect()
 }

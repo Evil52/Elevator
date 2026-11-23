@@ -9,7 +9,9 @@ pub use journal::{Direction, Journal};
 pub use origin::OriginPolicy;
 pub use server::Gateway;
 
-use elevator_wire::protocol::{Envelope, Message, MessageError, decode_message, encode_message};
+use elevator_wire::protocol::{
+    Envelope, Message, MessageError, Ping, decode_message, encode_message,
+};
 use elevator_wire::{Decoder, MAX_FRAME, MAX_PAYLOAD, encode_frame};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,6 +34,7 @@ pub struct Bridge {
     decoder: Decoder,
     expected_frame_seq: Option<u8>,
     tx_frame_seq: u8,
+    ping_counter: u32,
     stats: Stats,
     identity: Option<(u32, u32)>,
 }
@@ -43,6 +46,7 @@ impl Bridge {
             decoder: Decoder::new(),
             expected_frame_seq: None,
             tx_frame_seq: 0,
+            ping_counter: 0,
             stats: Stats::default(),
             identity: None,
         }
@@ -89,6 +93,28 @@ impl Bridge {
         self.identity
     }
 
+    pub fn ping_frame(&mut self) -> Result<Vec<u8>, CommandError> {
+        let (boot_id, run_id) = self.identity.unwrap_or_default();
+        let counter = self.ping_counter;
+        self.ping_counter = counter.wrapping_add(1);
+        self.frame_of(&Envelope::new(
+            boot_id,
+            run_id,
+            counter,
+            Message::Ping(Ping { counter }),
+        ))
+    }
+
+    fn frame_of(&mut self, envelope: &Envelope) -> Result<Vec<u8>, CommandError> {
+        let mut payload = [0_u8; MAX_PAYLOAD];
+        let length = encode_message(envelope, &mut payload).map_err(CommandError::Message)?;
+        let mut frame = [0_u8; MAX_FRAME];
+        let written = encode_frame(self.tx_frame_seq, &payload[..length], &mut frame)
+            .map_err(|_| CommandError::Frame)?;
+        self.tx_frame_seq = self.tx_frame_seq.wrapping_add(1);
+        Ok(frame[..written].to_vec())
+    }
+
     pub fn command_frame(&mut self, json: &str) -> Result<Vec<u8>, CommandError> {
         let envelope: Envelope = serde_json::from_str(json).map_err(CommandError::Json)?;
         if !matches!(
@@ -102,13 +128,7 @@ impl Bridge {
         ) {
             return Err(CommandError::NotACommand);
         }
-        let mut payload = [0_u8; MAX_PAYLOAD];
-        let length = encode_message(&envelope, &mut payload).map_err(CommandError::Message)?;
-        let mut frame = [0_u8; MAX_FRAME];
-        let written = encode_frame(self.tx_frame_seq, &payload[..length], &mut frame)
-            .map_err(|_| CommandError::Frame)?;
-        self.tx_frame_seq = self.tx_frame_seq.wrapping_add(1);
-        Ok(frame[..written].to_vec())
+        self.frame_of(&envelope)
     }
 }
 

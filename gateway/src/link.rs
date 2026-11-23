@@ -37,6 +37,20 @@ fn read_until_lost<R: Read>(
     }
 }
 
+pub const PING_EVERY: Duration = Duration::from_secs(1);
+
+pub fn heartbeat(
+    gateway: &Gateway,
+    period: Duration,
+    mut sleep: impl FnMut(Duration),
+    stop: impl Fn() -> bool,
+) {
+    while !stop() {
+        gateway.ping_board();
+        sleep(period);
+    }
+}
+
 pub fn supervise<R, W>(
     gateway: &Gateway,
     mut open: impl FnMut() -> io::Result<(R, W)>,

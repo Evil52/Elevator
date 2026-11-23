@@ -31,6 +31,9 @@ export type Message =
     }
   | {
       readLog: ReadLog;
+    }
+  | {
+      ping: Ping;
     };
 export type ResetReason = "powerOn" | "button" | "watchdog" | "software" | "brownout";
 export type DoorState = "closed" | "opening" | "open" | "closing";
@@ -150,4 +153,7 @@ export interface Event {
 export interface ReadLog {
   fromIndex: number;
   requestId: number;
+}
+export interface Ping {
+  counter: number;
 }

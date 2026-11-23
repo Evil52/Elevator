@@ -20,3 +20,20 @@ fn the_red_led_stays_dark_before_the_outputs_are_allowed() {
         assert!(!led3_on(state, false), "{state:?}");
     }
 }
+
+#[test]
+fn led2_follows_the_link_once_the_outputs_are_allowed() {
+    use elevator_fw_logic::outputs::led2_on;
+    for state in [State::Running, State::Fault, State::Recovery] {
+        assert!(led2_on(state, true), "{state:?}");
+        assert!(!led2_on(state, false), "{state:?}");
+    }
+}
+
+#[test]
+fn led2_stays_dark_before_the_outputs_are_allowed() {
+    use elevator_fw_logic::outputs::led2_on;
+    for state in [State::Boot, State::SelfCheck, State::InputsReady] {
+        assert!(!led2_on(state, true), "{state:?}");
+    }
+}

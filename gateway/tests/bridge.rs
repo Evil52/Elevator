@@ -1,8 +1,8 @@
 use elevator_gateway::{Bridge, CommandError, Stats, to_json};
 use elevator_wire::protocol::{
     AckAlarm, CallFloor, CarMode, CarSnapshot, Direction, DoorState, Envelope, Hello, InjectFault,
-    Message, MessageError, ReadLog, RecoverCar, ResetReason, SimAction, SimControl, decode_message,
-    encode_message,
+    Message, MessageError, Ping, ReadLog, RecoverCar, ResetReason, SimAction, SimControl,
+    decode_message, encode_message,
 };
 use elevator_wire::{MAX_FRAME, MAX_PAYLOAD, decode_frame, encode_frame};
 
@@ -273,4 +273,55 @@ fn bad_commands_are_refused_and_consume_no_frame_number() {
     ));
     let bytes = bridge.command_frame(&command_json(2)).expect("frame");
     assert_eq!(unframe(&bytes).0, 0);
+}
+
+#[test]
+fn ping_frames_carry_a_counter_that_counts_up_and_the_frame_number_advances() {
+    let mut bridge = Bridge::new();
+    let first = unframe(&bridge.ping_frame().expect("frame"));
+    let second = unframe(&bridge.ping_frame().expect("frame"));
+    assert_eq!(first.1.message, Message::Ping(Ping { counter: 0 }));
+    assert_eq!(second.1.message, Message::Ping(Ping { counter: 1 }));
+    assert_eq!((first.0, second.0), (0, 1));
+}
+
+#[test]
+fn a_ping_frame_shares_the_frame_numbers_with_commands() {
+    let mut bridge = Bridge::new();
+    bridge.command_frame(&command_json(1)).expect("frame");
+    assert_eq!(unframe(&bridge.ping_frame().expect("frame")).0, 1);
+    assert_eq!(
+        unframe(&bridge.command_frame(&command_json(2)).expect("frame")).0,
+        2
+    );
+}
+
+#[test]
+fn a_ping_frame_names_the_board_it_was_last_heard_from() {
+    let mut bridge = Bridge::new();
+    let unheard = unframe(&bridge.ping_frame().expect("frame")).1;
+    assert_eq!((unheard.boot_id, unheard.run_id), (0, 0));
+    bridge.feed(&frame_of(0, &hello(77, 3, 1)));
+    let heard = unframe(&bridge.ping_frame().expect("frame")).1;
+    assert_eq!((heard.boot_id, heard.run_id), (77, 3));
+}
+
+#[test]
+fn the_ping_counter_keeps_counting() {
+    let mut bridge = Bridge::new();
+    for _ in 0..3 {
+        bridge.ping_frame().expect("frame");
+    }
+    let envelope = unframe(&bridge.ping_frame().expect("frame")).1;
+    assert_eq!(envelope.message, Message::Ping(Ping { counter: 3 }));
+}
+
+#[test]
+fn a_browser_cannot_send_a_ping() {
+    let mut bridge = Bridge::new();
+    let json = to_json(&Envelope::new(1, 1, 0, Message::Ping(Ping { counter: 0 }))).expect("json");
+    assert!(matches!(
+        bridge.command_frame(&json),
+        Err(CommandError::NotACommand)
+    ));
 }
