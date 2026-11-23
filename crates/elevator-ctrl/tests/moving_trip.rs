@@ -8,7 +8,8 @@ fn starts() -> Vec<(u32, u32)> {
     let mut all = Vec::new();
     for speed in [0, 1, 37, 300, 800, 1100, 1599, 1600] {
         for accel in [0, 1, 250, 700, 1000] {
-            if lift().stopping_distance_mm(speed, accel).is_some() {
+            let real = u64::from(speed) * 2000 >= u64::from(accel) * u64::from(accel);
+            if real && lift().stopping_distance_mm(speed, accel).is_some() {
                 all.push((speed, accel));
             }
         }
@@ -168,5 +169,43 @@ fn extreme_parameters_neither_panic_nor_break_the_endpoints() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn replanning_while_accelerating_keeps_the_arrival_and_the_path() {
+    let whole = lift().moving_trip(27000, 0, 0).unwrap();
+    for at in [300, 700, 1000, 1400, 1800, 2200] {
+        let (done, speed, accel) = whole.sample(at);
+        let accel = u32::try_from(accel).unwrap();
+        let rest = lift().moving_trip(27000 - done, speed, accel).unwrap();
+        let left = whole.duration_ms() - at;
+        assert!(
+            rest.duration_ms().abs_diff(left) <= 12,
+            "at={at}: {} vs {left}",
+            rest.duration_ms()
+        );
+        for t in (0..=left).step_by(10) {
+            let expected = whole.sample(at + t).0;
+            let replanned = done + rest.sample(t).0;
+            assert!(expected.abs_diff(replanned) <= 20, "at={at} t={t}");
+        }
+    }
+}
+
+#[test]
+fn a_replan_on_the_rising_edge_keeps_accelerating_up_to_the_peak() {
+    let whole = lift().moving_trip(27000, 0, 0).unwrap();
+    for at in [200, 500, 800] {
+        let (done, speed, accel) = whole.sample(at);
+        let accel = u32::try_from(accel).unwrap();
+        let rest = lift().moving_trip(27000 - done, speed, accel).unwrap();
+        let mut previous = rest.sample(0).2;
+        for t in 1..=(1000 - accel) {
+            let now = rest.sample(t).2;
+            assert!(now + 2 >= previous, "at={at} t={t}: {previous} -> {now}");
+            previous = now;
+        }
+        assert!(previous >= 990, "at={at}: peak {previous}");
     }
 }

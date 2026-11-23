@@ -55,11 +55,41 @@ impl MotionParams {
         speed_mm_s: u32,
         accel_mm_s2: u32,
     ) -> Option<u32> {
-        let settle = self.settle(speed_mm_s, accel_mm_s2)?;
-        let rest = (u128::from(distance_mm) * UM).checked_sub(settle.path)?;
         Some(saturate(
-            settle.millis + self.stop_plan_um(rest, settle.speed)?.duration_ms(),
+            self.moving_plan(distance_mm, speed_mm_s, accel_mm_s2)?
+                .duration_ms(),
         ))
+    }
+
+    fn moving_plan(
+        &self,
+        distance_mm: u32,
+        speed_mm_s: u32,
+        accel_mm_s2: u32,
+    ) -> Option<MovingPlan> {
+        let settle = self.settle(speed_mm_s, accel_mm_s2)?;
+        let total = u128::from(distance_mm) * UM;
+        let rest = total.checked_sub(settle.path)?;
+        if accel_mm_s2 == 0 {
+            return Some(MovingPlan {
+                launch_ms: 0,
+                start: settle.speed,
+                plan: self.stop_plan_um(rest, settle.speed)?,
+            });
+        }
+        if self.ramp(0, settle.speed).1 > rest {
+            return None;
+        }
+        let speed = u128::from(speed_mm_s) * UM;
+        let accel = u128::from(accel_mm_s2) * UM;
+        let jerk = u128::from(self.jerk_mm_s3) * UM;
+        let start = speed.saturating_sub(settle.speed - speed);
+        let launch_um = start * accel / jerk + accel * accel * accel / (6 * jerk * jerk);
+        Some(MovingPlan {
+            launch_ms: 1000 * accel / jerk,
+            start,
+            plan: self.cruise_plan(total + launch_um, start, settle.speed),
+        })
     }
 
     fn settle(&self, speed_mm_s: u32, accel_mm_s2: u32) -> Option<Settled> {
@@ -70,7 +100,6 @@ impl MotionParams {
         let accel = u128::from(accel_mm_s2) * UM;
         let jerk = u128::from(self.jerk_mm_s3) * UM;
         let settled = Settled {
-            millis: div_ceil(1000 * accel, jerk),
             path: div_ceil(
                 3 * speed * accel * jerk + accel * accel * accel,
                 3 * jerk * jerk,
@@ -84,18 +113,22 @@ impl MotionParams {
         if self.ramp(0, start).1 > distance {
             return None;
         }
+        Some(self.cruise_plan(distance, start, start))
+    }
+
+    fn cruise_plan(&self, distance: u128, start: u128, least: u128) -> StopPlan {
         if distance == 0 {
-            return Some(StopPlan {
+            return StopPlan {
                 ramps_ms: 0,
                 cruise_ms: 0,
                 cruise: start,
-            });
+            };
         }
 
         let top = u128::from(self.max_speed_mm_s) * UM;
-        let (mut low, mut high) = (start, top);
-        if self.profile_um(start, top) <= distance {
-            low = top;
+        let (mut low, mut high) = (least, top.max(least));
+        if self.profile_um(start, high) <= distance {
+            low = high;
         }
         while low < high {
             let mid = low + (high - low).div_ceil(2);
@@ -108,11 +141,11 @@ impl MotionParams {
         let cruise = low.max(1);
         let (ramps_ms, covered) = self.profile(start, cruise);
         let cruise_ms = div_ceil(1000 * distance.saturating_sub(covered), cruise);
-        Some(StopPlan {
+        StopPlan {
             ramps_ms,
             cruise_ms,
             cruise,
-        })
+        }
     }
 
     fn profile(&self, start: u128, cruise: u128) -> (u128, u128) {
@@ -171,6 +204,18 @@ struct StopPlan {
     cruise: u128,
 }
 
+struct MovingPlan {
+    launch_ms: u128,
+    start: u128,
+    plan: StopPlan,
+}
+
+impl MovingPlan {
+    const fn duration_ms(&self) -> u128 {
+        self.plan.duration_ms().saturating_sub(self.launch_ms)
+    }
+}
+
 impl StopPlan {
     const fn duration_ms(&self) -> u128 {
         self.ramps_ms + self.cruise_ms
@@ -178,7 +223,6 @@ impl StopPlan {
 }
 
 struct Settled {
-    millis: u128,
     path: u128,
     speed: u128,
 }

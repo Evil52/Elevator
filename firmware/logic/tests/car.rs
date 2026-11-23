@@ -667,7 +667,7 @@ fn changing_the_stop_on_the_way_moves_the_car_without_jumps() {
             let case = format!("departed {departed_ms} t={elapsed} {previous:?} -> {now:?}");
             assert!(now.0 >= previous.0 && now.0 - previous.0 <= 2, "{case}");
             assert!(now.1.abs_diff(previous.1) <= 2, "{case}");
-            assert!(now.2.abs_diff(previous.2) <= 50, "{case}");
+            assert!(now.2.abs_diff(previous.2) <= 12, "{case}");
             assert!(now.1 <= 1600 && now.2.abs() <= 1010, "{case}");
             previous = now;
             elapsed += 1;
@@ -749,4 +749,163 @@ fn going_down_with_low_floors_it_stops_at_the_first_floor_it_still_can() {
     }
     assert_eq!(car.speed_mm_s(), 1600);
     assert_eq!(stops(&mut car, down(&[5, 3, 1]), 3), [3, 1, 5]);
+}
+
+fn run_smooth(car: &mut Car, targets: Targets, case: &str) {
+    let mut previous = (car.position_mm(), car.speed_mm_s(), car.accel_mm_s2());
+    let mut elapsed = 0;
+    while !arrived(car) {
+        car.step(1, CarMode::Normal, targets);
+        let now = (car.position_mm(), car.speed_mm_s(), car.accel_mm_s2());
+        let at = format!("{case} t={elapsed} {previous:?} -> {now:?}");
+        assert!(now.0.abs_diff(previous.0) <= 2, "{at}");
+        assert!(now.1.abs_diff(previous.1) <= 2, "{at}");
+        assert!(now.2.abs_diff(previous.2) <= 12, "{at}");
+        previous = now;
+        elapsed += 1;
+        assert!(elapsed < 60_000, "{case}");
+    }
+}
+
+fn first_floor_still_reachable(car: &Car) -> u8 {
+    let accel = u32::try_from(car.accel_mm_s2().max(0)).unwrap();
+    let stop = motion()
+        .stopping_distance_mm(car.speed_mm_s(), accel)
+        .unwrap();
+    u8::try_from((car.position_mm() + stop).div_ceil(HEIGHT) + 1).unwrap()
+}
+
+#[test]
+fn a_cancelled_stop_ends_the_trip_at_the_first_floor_the_car_can_still_reach() {
+    for departed_ms in [1500, 2300, 4000, 5200] {
+        let mut car = Car::new(params(), 1);
+        drive(&mut car, up(&[10]), departed_ms);
+        let expected = first_floor_still_reachable(&car);
+        assert!(expected < 10, "departed {departed_ms}: {expected}");
+        run_smooth(
+            &mut car,
+            Targets::default(),
+            &format!("departed {departed_ms}"),
+        );
+        assert_eq!(car.stopped_at(), Some(expected), "departed {departed_ms}");
+    }
+}
+
+#[test]
+fn a_cancelled_stop_of_a_car_going_down_ends_at_the_first_floor_below() {
+    let mut car = Car::new(params(), 10);
+    drive(&mut car, down(&[1]), 3000);
+    let accel = u32::try_from(car.accel_mm_s2().max(0)).unwrap();
+    let stop = motion()
+        .stopping_distance_mm(car.speed_mm_s(), accel)
+        .unwrap();
+    let expected = u8::try_from((car.position_mm() - stop) / HEIGHT + 1).unwrap();
+    run_smooth(&mut car, Targets::default(), "down");
+    assert_eq!(car.stopped_at(), Some(expected));
+    assert!(expected > 1);
+}
+
+#[test]
+fn a_farther_call_replacing_the_stop_moves_the_stop_farther() {
+    for departed_ms in [500, 1500, 3000] {
+        let mut car = Car::new(params(), 1);
+        drive(&mut car, up(&[5]), departed_ms);
+        run_smooth(&mut car, up(&[9]), &format!("departed {departed_ms}"));
+        assert_eq!(car.stopped_at(), Some(9), "departed {departed_ms}");
+    }
+}
+
+#[test]
+fn a_farther_turn_point_replaces_a_nearer_one() {
+    let mut car = Car::new(params(), 1);
+    drive(&mut car, down(&[6]), 1500);
+    run_smooth(&mut car, down(&[8]), "turn");
+    assert_eq!(car.stopped_at(), Some(8));
+}
+
+#[test]
+fn a_braking_car_keeps_its_stop_even_when_the_call_is_gone() {
+    let mut car = Car::new(params(), 1);
+    let mut elapsed = 0;
+    while car.accel_mm_s2() >= 0 || car.speed_mm_s() == 0 {
+        car.step(1, CarMode::Normal, up(&[5]));
+        elapsed += 1;
+        assert!(elapsed < 60_000);
+    }
+    run_smooth(&mut car, Targets::default(), "braking");
+    assert_eq!(car.stopped_at(), Some(5));
+}
+
+#[test]
+fn a_still_wanted_stop_is_never_abandoned_for_a_farther_one() {
+    let mut car = Car::new(params(), 1);
+    drive(&mut car, up(&[5]), 800);
+    let both = Targets {
+        up: floor_bit(5) | floor_bit(9),
+        down: 0,
+    };
+    run_smooth(&mut car, both, "both");
+    assert_eq!(car.stopped_at(), Some(5));
+}
+
+#[test]
+fn every_reported_state_of_a_trip_is_accepted_by_the_eta() {
+    let eta_state = |car: &Car| {
+        let accel = u32::try_from(car.accel_mm_s2().max(0)).unwrap();
+        motion().stopping_distance_mm(car.speed_mm_s(), accel)
+    };
+    for (from, first, second, switch_ms) in [
+        (1u32, 10u32, 6u32, 700u32),
+        (1, 10, 6, 1500),
+        (1, 10, 4, 3000),
+        (1, 5, 9, 900),
+        (10, 1, 5, 1200),
+        (1, 10, 0, 2000),
+        (3, 10, 7, 2100),
+    ] {
+        let mut car = Car::new(params(), u8::try_from(from).unwrap());
+        let direction_down = from > first;
+        let pick = |floor: u32| match (floor, direction_down) {
+            (0, _) => Targets::default(),
+            (f, true) => down(&[f]),
+            (f, false) => up(&[f]),
+        };
+        let mut elapsed = 0;
+        while !arrived(&car) {
+            let targets = pick(if elapsed < switch_ms { first } else { second });
+            car.step(1, CarMode::Normal, targets);
+            assert!(
+                eta_state(&car).is_some(),
+                "{from}->{first}->{second} t={elapsed}: v={} a={}",
+                car.speed_mm_s(),
+                car.accel_mm_s2()
+            );
+            elapsed += 1;
+            assert!(elapsed < 60_000);
+        }
+    }
+}
+
+#[test]
+fn the_reported_acceleration_never_exceeds_the_configured_limit() {
+    let hard = PlantParams {
+        motion: MotionParams::new(788, 1374, 3148).unwrap(),
+        ..params()
+    };
+    for (from, to) in [(1u8, 10u32), (10, 1)] {
+        let mut car = Car::new(hard, from);
+        let targets = if from == 1 { up(&[to]) } else { down(&[to]) };
+        let mut elapsed = 0;
+        while !arrived(&car) {
+            car.step(1, CarMode::Normal, targets);
+            assert!(
+                car.accel_mm_s2().abs() <= 1374,
+                "t={elapsed}: {}",
+                car.accel_mm_s2()
+            );
+            assert!(car.speed_mm_s() <= 788);
+            elapsed += 1;
+            assert!(elapsed < 120_000);
+        }
+    }
 }

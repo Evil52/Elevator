@@ -207,6 +207,20 @@ fn longer_distance_takes_no_less_time_up_to_one_millisecond() {
     }
 }
 
+fn rising_phase(v0: f64, a0: f64, target: f64, amax: f64, j: f64) -> (f64, f64) {
+    let gain = target - v0;
+    let peak = (j * gain + a0 * a0 / 2.0).sqrt().min(amax);
+    let up = (peak - a0) / j;
+    let hold = ((gain - (2.0 * peak * peak - a0 * a0) / (2.0 * j)) / peak).max(0.0);
+    let down = peak / j;
+    let v1 = v0 + a0 * up + j * up * up / 2.0;
+    let x1 = v0 * up + a0 * up * up / 2.0 + j * up.powi(3) / 6.0;
+    let v2 = v1 + peak * hold;
+    let x2 = v1 * hold + peak * hold * hold / 2.0;
+    let x3 = v2 * down + peak * down * down / 2.0 - j * down.powi(3) / 6.0;
+    (up + hold + down, x1 + x2 + x3)
+}
+
 fn ideal_ms_accelerating(
     max_speed: u32,
     accel: u32,
@@ -215,11 +229,32 @@ fn ideal_ms_accelerating(
     speed: u32,
     a0: u32,
 ) -> f64 {
-    let (j, v0, a0) = (f64::from(jerk), f64::from(speed), f64::from(a0));
-    let settle_s = a0 / j;
-    let path = v0 * settle_s + a0 * settle_s * settle_s / 2.0 - j * settle_s.powi(3) / 6.0;
-    let v1 = v0 + a0 * a0 / (2.0 * j);
-    settle_s * 1000.0 + ideal_ms_from(max_speed, accel, jerk, f64::from(distance) - path, v1)
+    let (vmax, amax, j) = (f64::from(max_speed), f64::from(accel), f64::from(jerk));
+    let (v0, a0, distance) = (f64::from(speed), f64::from(a0), f64::from(distance));
+    let settled = v0 + a0 * a0 / (2.0 * j);
+    let covered =
+        |c: f64| rising_phase(v0, a0, c, amax, j).1 + rising_phase(0.0, 0.0, c, amax, j).1;
+    let cruise = if covered(vmax) <= distance {
+        vmax
+    } else {
+        let (mut low, mut high) = (settled, vmax);
+        for _ in 0..200 {
+            let mid = f64::midpoint(low, high);
+            if covered(mid) <= distance {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        low
+    };
+    let ramps = rising_phase(v0, a0, cruise, amax, j).0 + rising_phase(0.0, 0.0, cruise, amax, j).0;
+    let flat = if cruise > 0.0 {
+        (distance - covered(cruise)).max(0.0) / cruise
+    } else {
+        0.0
+    };
+    (ramps + flat) * 1000.0
 }
 
 #[test]
@@ -229,8 +264,15 @@ fn random_accelerating_cases_stay_close_to_the_ideal_plan() {
         let max_speed = rng.range(400, 6000);
         let accel = rng.range(200, 3000);
         let jerk = rng.range(200, 5000);
-        let speed = rng.range(0, max_speed);
         let a0 = rng.range(0, accel);
+        let least = (u64::from(a0) * u64::from(a0)).div_ceil(2 * u64::from(jerk)) + 1;
+        let Ok(least) = u32::try_from(least) else {
+            continue;
+        };
+        if least >= max_speed {
+            continue;
+        }
+        let speed = rng.range(least, max_speed);
         let distance = rng.range(1, 60_000);
         let p = MotionParams::new(max_speed, accel, jerk).expect("не нулевые");
 

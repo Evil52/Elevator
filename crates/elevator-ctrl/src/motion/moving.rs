@@ -1,11 +1,7 @@
-use super::{MotionParams, UM, div_ceil};
+use super::{MotionParams, div_ceil};
 
 #[derive(Clone, Copy, Debug)]
 enum Shape {
-    Settle {
-        from: u64,
-        gain: u64,
-    },
     Ramp {
         from: u64,
         delta: u64,
@@ -21,6 +17,7 @@ enum Shape {
 struct Piece {
     shape: Shape,
     length_ms: u32,
+    offset_ms: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -28,7 +25,7 @@ pub struct MovingTrip {
     distance_mm: u32,
     duration_ms: u32,
     total_nm: u64,
-    pieces: [Piece; 4],
+    pieces: [Piece; 3],
 }
 
 struct Point {
@@ -58,35 +55,27 @@ impl MotionParams {
         speed_mm_s: u32,
         accel_mm_s2: u32,
     ) -> Option<MovingTrip> {
-        let settle = self.settle(speed_mm_s, accel_mm_s2)?;
-        let rest = (u128::from(distance_mm) * UM).checked_sub(settle.path)?;
-        let plan = self.stop_plan_um(rest, settle.speed)?;
-        let duration_ms = u32::try_from(settle.millis + plan.duration_ms()).ok()?;
-        let start = u64::from(speed_mm_s) * 1000;
-        let settled = u64::try_from(settle.speed).ok()?;
-        let cruise = u64::try_from(plan.cruise).ok()?;
-        let (accel_ms, _) = self.ramp(settle.speed, plan.cruise);
-        let (brake_ms, _) = self.ramp(0, plan.cruise);
+        let moving = self.moving_plan(distance_mm, speed_mm_s, accel_mm_s2)?;
+        let duration_ms = u32::try_from(moving.duration_ms()).ok()?;
+        let start = u64::try_from(moving.start).ok()?;
+        let cruise = u64::try_from(moving.plan.cruise).ok()?;
+        let (accel_ms, _) = self.ramp(moving.start, moving.plan.cruise);
+        let (brake_ms, _) = self.ramp(0, moving.plan.cruise);
         let pieces = [
             Piece {
-                shape: Shape::Settle {
-                    from: start,
-                    gain: settled - start,
-                },
-                length_ms: u32::try_from(settle.millis).ok()?,
-            },
-            Piece {
                 shape: Shape::Ramp {
-                    from: settled,
-                    delta: cruise - settled,
+                    from: start,
+                    delta: cruise - start,
                     rise: self.rise_ms(accel_ms)?,
                     down: false,
                 },
-                length_ms: u32::try_from(accel_ms).ok()?,
+                length_ms: u32::try_from(accel_ms.saturating_sub(moving.launch_ms)).ok()?,
+                offset_ms: u32::try_from(moving.launch_ms.min(accel_ms)).ok()?,
             },
             Piece {
                 shape: Shape::Cruise { speed: cruise },
-                length_ms: u32::try_from(plan.cruise_ms).ok()?,
+                length_ms: u32::try_from(moving.plan.cruise_ms).ok()?,
+                offset_ms: 0,
             },
             Piece {
                 shape: Shape::Ramp {
@@ -96,6 +85,7 @@ impl MotionParams {
                     down: true,
                 },
                 length_ms: u32::try_from(brake_ms).ok()?,
+                offset_ms: 0,
             },
         ];
         let mut total_nm = 0u64;
@@ -155,7 +145,6 @@ impl MovingTrip {
                 && piece
                     .checkpoints()
                     .iter()
-                    .flatten()
                     .any(|&local| self.scaled(piece, before_nm, local).is_none())
             {
                 return false;
@@ -174,14 +163,10 @@ impl MovingTrip {
         let total = u128::from(self.total_nm);
         let path = u128::from(before_nm).checked_add(point.path_nm)?;
         let travelled = nearest(distance.checked_mul(path)?, total)?;
-        let speed = nearest(
-            (distance * 1000).checked_mul(point.speed_num)?,
-            point.speed_den.checked_mul(total)?,
-        )?;
-        let accel = nearest(
-            (distance * 1_000_000).checked_mul(point.accel_num)?,
-            point.accel_den.checked_mul(total)?,
-        )?;
+        let speed =
+            (distance * 1000).checked_mul(point.speed_num)? / point.speed_den.checked_mul(total)?;
+        let accel = (distance * 1_000_000).checked_mul(point.accel_num)?
+            / point.accel_den.checked_mul(total)?;
         let accel = i64::try_from(accel).ok()?;
         Some((
             u32::try_from(travelled).ok()?,
@@ -192,11 +177,15 @@ impl MovingTrip {
 }
 
 impl Piece {
-    fn checkpoints(&self) -> [Option<u32>; 4] {
+    fn checkpoints(&self) -> [u32; 4] {
         let length = self.length_ms;
         match self.shape {
-            Shape::Ramp { rise, .. } => [Some(0), Some(rise), Some(length - rise), Some(length)],
-            Shape::Settle { .. } | Shape::Cruise { .. } => [Some(0), Some(length), None, None],
+            Shape::Ramp { rise, .. } => {
+                let whole = length + self.offset_ms;
+                let local = |at: u32| at.saturating_sub(self.offset_ms).min(length);
+                [0, local(rise), local(whole - rise), length]
+            }
+            Shape::Cruise { .. } => [0, length, length, length],
         }
     }
 
@@ -208,7 +197,6 @@ impl Piece {
     }
 
     fn point(&self, t: u128) -> Option<Point> {
-        let length = u128::from(self.length_ms);
         match self.shape {
             Shape::Cruise { speed } => {
                 let speed = u128::from(speed);
@@ -221,59 +209,32 @@ impl Piece {
                     braking: false,
                 })
             }
-            Shape::Settle { from, gain } => {
-                settle_point(u128::from(from), u128::from(gain), length, t)
-            }
             Shape::Ramp {
                 from,
                 delta,
                 rise,
                 down,
-            } => ramp_point(
-                u128::from(from),
-                u128::from(delta),
-                length,
-                u128::from(rise),
-                t,
-                down,
-            ),
+            } => {
+                let whole = u128::from(self.length_ms) + u128::from(self.offset_ms);
+                let at = |t: u128| {
+                    ramp_point(
+                        u128::from(from),
+                        u128::from(delta),
+                        whole,
+                        u128::from(rise),
+                        t,
+                        down,
+                    )
+                };
+                let mut point = at(t + u128::from(self.offset_ms))?;
+                if self.offset_ms > 0 {
+                    let base = at(u128::from(self.offset_ms))?;
+                    point.path_nm = point.path_nm.saturating_sub(base.path_nm);
+                }
+                Some(point)
+            }
         }
     }
-}
-
-fn settle_point(from: u128, gain: u128, length: u128, t: u128) -> Option<Point> {
-    if length == 0 {
-        return Some(Point {
-            path_nm: 0,
-            speed_num: from,
-            speed_den: 1,
-            accel_num: 0,
-            accel_den: 1,
-            braking: false,
-        });
-    }
-    let s = length;
-    let left = s - t;
-    let s2 = s.checked_mul(s)?;
-    let s3 = s2.checked_mul(s)?;
-    let curve = (3 * s2)
-        .checked_mul(t)?
-        .checked_add(left.checked_mul(left)?.checked_mul(left)?)?
-        - s3;
-    let path = from
-        .checked_mul(t)?
-        .checked_mul(3 * s2)?
-        .checked_add(gain.checked_mul(curve)?)?;
-    Some(Point {
-        path_nm: path / (3 * s2),
-        speed_num: from
-            .checked_mul(s2)?
-            .checked_add(gain.checked_mul(2 * s * t - t * t)?)?,
-        speed_den: s2,
-        accel_num: (2 * gain).checked_mul(left)?,
-        accel_den: s2,
-        braking: false,
-    })
 }
 
 fn ramp_point(
