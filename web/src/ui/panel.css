@@ -1,0 +1,135 @@
+:root {
+  color-scheme: light dark;
+  --car-h: 104px;
+  --ok: #1b7f3a;
+  --warn: #9a6700;
+  --error: #b3261e;
+  --line: #8884;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+}
+
+.panel {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.panel-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 900px) {
+  .panel-grid {
+    grid-template-columns: 2fr 1fr;
+  }
+  .alarms {
+    grid-column: 1 / -1;
+  }
+}
+
+.banner {
+  padding: 8px 12px;
+  border: 2px solid currentColor;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.banner-ok { color: var(--ok); }
+.banner-warn { color: var(--warn); }
+.banner-error { color: var(--error); }
+.banner-note { margin: 0 0 8px; font-size: 0.9em; }
+
+.building {
+  display: flex;
+  gap: 8px;
+  height: 600px;
+}
+.floor-labels {
+  box-sizing: border-box;
+  padding-top: var(--car-h) !important;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.shafts {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.shaft {
+  position: relative;
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.shaft-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--car-h);
+  bottom: 0;
+  border-top: 1px dashed var(--line);
+}
+.shaft-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0.7;
+}
+.car {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  box-sizing: border-box;
+  height: var(--car-h);
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  background: Canvas;
+  font-size: 0.8em;
+}
+.car-unavailable { color: var(--error); }
+.car-fireRecall, .car-firefighters { color: var(--warn); }
+.car-stale { font-style: italic; }
+
+.hall-calls ol, .alarms ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.hall-calls li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+}
+.floor-number { flex: 1; }
+button {
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 1em;
+}
+.blocked { color: var(--warn); font-weight: 600; }
+.alarm {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.alarm-active { color: var(--error); font-weight: 600; }
