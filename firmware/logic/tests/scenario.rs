@@ -492,3 +492,38 @@ fn restart_also_forgets_the_history() {
     assert_eq!(events_of(&scenario), Vec::new());
     assert_eq!(scenario.alarm_page(0).total, 0);
 }
+
+#[test]
+fn only_an_active_critical_alarm_counts_for_the_red_led() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    assert!(!scenario.critical_alarm_active());
+    scenario.fail_car(0).ok();
+    assert!(scenario.critical_alarm_active());
+    scenario.acknowledge_alarm(1).ok();
+    assert!(!scenario.critical_alarm_active());
+    scenario.recover_car(0).ok();
+    assert!(!scenario.critical_alarm_active());
+}
+
+#[test]
+fn a_log_overflow_alarm_is_not_critical() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    for round in 0..40 {
+        scenario.step(round * 10);
+        scenario.fail_car(0).ok();
+        scenario.recover_car(0).ok();
+    }
+    assert!(!scenario.critical_alarm_active());
+}
+
+#[test]
+fn a_second_failed_car_keeps_the_alarm_critical_after_the_first_is_acknowledged() {
+    let mut scenario = Scenario::new();
+    scenario.start_empty();
+    scenario.fail_car(0).ok();
+    scenario.fail_car(1).ok();
+    scenario.acknowledge_alarm(1).ok();
+    assert!(scenario.critical_alarm_active());
+}

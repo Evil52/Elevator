@@ -289,6 +289,12 @@ impl Scenario {
     }
 
     #[must_use]
+    pub fn critical_alarm_active(&self) -> bool {
+        self.alarms
+            .has_active(&[AlarmKind::CarFault, AlarmKind::FireRecall])
+    }
+
+    #[must_use]
     pub const fn alarm_version(&self) -> u32 {
         self.alarm_version
     }
