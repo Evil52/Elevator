@@ -125,6 +125,20 @@ button {
   font-size: 1em;
 }
 .blocked { color: var(--warn); font-weight: 600; }
+.fire-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fire-confirm {
+  margin-top: 8px;
+  padding: 12px;
+  border: 2px solid var(--error);
+  border-radius: 6px;
+}
+.fire-confirm button {
+  margin-right: 8px;
+}
 .alarm {
   display: flex;
   gap: 12px;

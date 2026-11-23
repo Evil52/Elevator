@@ -11,6 +11,7 @@ describe('панель целиком', () => {
     expect(screen.getByRole('status').textContent).toContain('Данные свежие')
     expect(screen.getByTestId('building')).toBeTruthy()
     expect(screen.getByRole('region', { name: 'Вызовы с этажей' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Управление пожарным режимом' })).toBeTruthy()
     expect(screen.getByRole('region', { name: 'Реестр тревог' })).toBeTruthy()
   })
 
