@@ -48,7 +48,7 @@ export type Rejection =
   "noSuchFloor" | "downFromFirst" | "upFromTop" | "wrongBoot" | "wrongRun" | "noSuchAlarm" | "noSuchCar" | "wrongState";
 export type AlarmKind = "fireRecall" | "carFault" | "linkLost" | "logOverflow";
 export type AlarmState = "active" | "acknowledged" | "cleared";
-export type SimAction = "pause" | "resume" | "reset";
+export type SimAction = "pause" | "resume" | "reset" | "fireRecall" | "clearFire";
 export type EventKind =
   "assigned" | "arrived" | "served" | "requeued" | "cancelled" | "alarmRaised" | "alarmAcked" | "alarmCleared";
 

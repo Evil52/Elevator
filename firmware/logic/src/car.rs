@@ -69,10 +69,20 @@ impl Car {
     }
 
     pub fn step(&mut self, dt_ms: u32, mode: CarMode, targets: Targets) {
+        let recall = mode == CarMode::FireRecall;
+        let targets = if recall {
+            Targets { up: 0, down: 1 }
+        } else {
+            targets
+        };
         match self.drive {
             Drive::Trip { .. } => self.drive_trip(dt_ms, mode, targets),
             Drive::Braking { .. } => self.drive_braking(dt_ms),
             Drive::Rest => {
+                if recall && self.stopped_at() == Some(1) {
+                    self.hold_doors_open(dt_ms);
+                    return;
+                }
                 self.advance_doors(dt_ms);
                 if mode != CarMode::Unavailable && self.cycle == Cycle::Closed {
                     self.depart(dt_ms, mode, targets);
@@ -144,6 +154,20 @@ impl Car {
         self.floor_position(u32::from(self.params.floors))
     }
 
+    fn hold_doors_open(&mut self, dt_ms: u32) {
+        if matches!(self.cycle, Cycle::Closed | Cycle::Closing(_)) {
+            self.cycle = Cycle::Opening(0);
+        }
+        if let Cycle::Opening(elapsed) = self.cycle {
+            let elapsed = elapsed.saturating_add(dt_ms);
+            self.cycle = if elapsed >= self.params.open_ms {
+                Cycle::Open(0)
+            } else {
+                Cycle::Opening(elapsed)
+            };
+        }
+    }
+
     fn advance_doors(&mut self, dt_ms: u32) {
         let p = self.params;
         let mut left = u64::from(dt_ms);
@@ -213,32 +237,44 @@ impl Car {
         let Some(stop) = motion.stopping_distance_mm(speed, accel) else {
             return;
         };
-        let own = match self.heading {
+        let position = self.position_mm;
+        let heading = self.heading;
+        let reachable = |floor: &u32| {
+            let at = self.floor_position(*floor);
+            at == to_mm
+                || match heading {
+                    Direction::Up => at > position && at >= position.saturating_add(stop),
+                    Direction::Down => at < position && at.saturating_add(stop) <= position,
+                }
+        };
+        let own = match heading {
             Direction::Up => targets.up,
             Direction::Down => targets.down,
         };
-        let position = self.position_mm;
-        let reachable = |floor: &u32| {
-            let at = self.floor_position(*floor);
-            own & (1 << (*floor - 1)) != 0
-                && match self.heading {
-                    Direction::Up => at < to_mm && at >= position.saturating_add(stop),
-                    Direction::Down => at > to_mm && at.saturating_add(stop) <= position,
-                }
+        let marked = |mask: u32| move |floor: &u32| mask & (1 << (*floor - 1)) != 0;
+        let floors = || (1..=u32::from(self.params.floors)).filter(reachable);
+        let wanted = match heading {
+            Direction::Up => floors()
+                .find(marked(own))
+                .or_else(|| floors().rev().find(marked(own | targets.up | targets.down)))
+                .or_else(|| floors().next()),
+            Direction::Down => floors()
+                .rev()
+                .find(marked(own))
+                .or_else(|| floors().find(marked(own | targets.up | targets.down)))
+                .or_else(|| floors().next_back()),
         };
-        let floors = 1..=u32::from(self.params.floors);
-        let next = match self.heading {
-            Direction::Up => floors.clone().find(reachable),
-            Direction::Down => floors.rev().find(reachable),
-        };
-        let Some(floor) = next else {
+        let Some(floor) = wanted else {
             return;
         };
-        let to_mm = self.floor_position(floor);
-        if let Some(trip) = motion.moving_trip(position.abs_diff(to_mm), speed, accel) {
+        let to_mm_new = self.floor_position(floor);
+        if to_mm_new == to_mm {
+            return;
+        }
+        if let Some(trip) = motion.moving_trip(position.abs_diff(to_mm_new), speed, accel) {
             self.drive = Drive::Trip {
                 from_mm: position,
-                to_mm,
+                to_mm: to_mm_new,
                 trip,
                 elapsed_ms: 0,
             };
@@ -295,8 +331,8 @@ impl Car {
         };
         let elapsed_ms = elapsed_ms.saturating_add(dt_ms);
         let (travelled, speed, accel) = trip.sample(elapsed_ms);
-        let speed = speed.min(self.params.motion.max_speed_mm_s());
-        let accel = accel.min(i64::from(self.accel_limit(speed)));
+        let limit = i64::from(self.params.motion.accel_mm_s2());
+        let accel = accel.clamp(-limit, limit);
         self.position_mm = if to_mm >= from_mm {
             from_mm + travelled
         } else {
@@ -308,7 +344,11 @@ impl Car {
             self.position_mm = to_mm;
             self.speed_mm_s = 0;
             self.drive = Drive::Rest;
-            self.cycle = Cycle::Opening(0);
+            self.cycle = if mode == CarMode::FireRecall && to_mm != 0 {
+                Cycle::Closed
+            } else {
+                Cycle::Opening(0)
+            };
         } else {
             self.drive = Drive::Trip {
                 from_mm,
@@ -317,15 +357,6 @@ impl Car {
                 elapsed_ms,
             };
         }
-    }
-
-    fn accel_limit(&self, speed_mm_s: u32) -> u32 {
-        let motion = self.params.motion;
-        let headroom = u64::from(motion.max_speed_mm_s().saturating_sub(speed_mm_s));
-        let reachable = (2 * u64::from(motion.jerk_mm_s3()) * headroom).isqrt();
-        u32::try_from(reachable)
-            .unwrap_or(u32::MAX)
-            .min(motion.accel_mm_s2())
     }
 
     fn start_braking(&mut self, dt_ms: u32) {

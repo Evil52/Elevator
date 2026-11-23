@@ -2,6 +2,7 @@ import type { SimTransport } from './transport/types.ts'
 import { AlarmList } from './ui/AlarmList.tsx'
 import { Building } from './ui/Building.tsx'
 import { EventLogView } from './ui/EventLogView.tsx'
+import { FireControls } from './ui/FireControls.tsx'
 import { HallCalls } from './ui/HallCalls.tsx'
 import { StatusBanner } from './ui/StatusBanner.tsx'
 import { useSimState } from './ui/useSimState.ts'
@@ -16,6 +17,7 @@ export function App({ transport }: { transport: SimTransport }) {
       <div className="panel-grid">
         <Building state={state} />
         <HallCalls state={state} transport={transport} />
+        <FireControls state={state} transport={transport} />
         <AlarmList state={state} transport={transport} />
         <EventLogView state={state} transport={transport} />
       </div>

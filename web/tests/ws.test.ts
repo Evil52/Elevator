@@ -310,6 +310,14 @@ describe('команды', () => {
     expect(JSON.parse(socket.sent[3] ?? '{}').message.readLog.fromIndex).toBe(7)
   })
 
+  it('пожарный возврат и его снятие уходят как simControl с нужным действием', () => {
+    const { ws, socket } = live()
+    void ws.simControl('fireRecall')
+    void ws.simControl('clearFire')
+    const actions = socket.sent.map((text) => JSON.parse(text).message.simControl.action)
+    expect(actions).toEqual(['fireRecall', 'clearFire'])
+  })
+
   it('чтение журнала возвращает sent сразу, остальные ждут результата', async () => {
     const { ws } = live()
     expect(await ws.readLog(0)).toMatchObject({ kind: 'sent' })

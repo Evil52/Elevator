@@ -258,9 +258,29 @@ pub fn valid_fixtures() -> Vec<(String, Value)> {
     ];
     cases
         .into_iter()
+        .chain(fire_examples())
         .chain(pagination_examples(alarms[0], events[0]))
         .map(|(name, message)| (name.to_owned(), to_value(&envelope(message))))
         .collect()
+}
+
+fn fire_examples() -> [(&'static str, Message); 2] {
+    [
+        (
+            "sim_control_fire_recall",
+            Message::SimControl(SimControl {
+                request_id: 15,
+                action: SimAction::FireRecall,
+            }),
+        ),
+        (
+            "sim_control_clear_fire",
+            Message::SimControl(SimControl {
+                request_id: 16,
+                action: SimAction::ClearFire,
+            }),
+        ),
+    ]
 }
 
 fn base(name: &str) -> Value {

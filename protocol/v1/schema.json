@@ -697,7 +697,9 @@
       "enum": [
         "pause",
         "resume",
-        "reset"
+        "reset",
+        "fireRecall",
+        "clearFire"
       ]
     },
     "SimControl": {

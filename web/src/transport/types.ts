@@ -33,7 +33,7 @@ export type CommandOutcome =
   | { kind: 'sent'; requestId: number }
   | { kind: 'blocked'; requestId: number; reason: BlockReason }
 
-export type SimActionName = 'pause' | 'resume' | 'reset'
+export type SimActionName = 'pause' | 'resume' | 'reset' | 'fireRecall' | 'clearFire'
 
 export interface SimTransport {
   getState(): PanelState

@@ -202,6 +202,8 @@ pub enum SimAction {
     Pause,
     Resume,
     Reset,
+    FireRecall,
+    ClearFire,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

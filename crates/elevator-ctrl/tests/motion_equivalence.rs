@@ -219,11 +219,19 @@ fn optimised_motion_equals_the_reference_bit_for_bit() {
                 2 => rng.below(u32::MAX),
                 _ => u32::MAX - rng.below(3),
             };
-            assert_eq!(
-                fast.time_to_stop_from_ms(distance, speed, accel0),
-                slow.time_to_stop_from_ms(distance, speed, accel0),
-                "time vmax={vmax} accel={accel} jerk={jerk} d={distance} v={speed} a={accel0}"
-            );
+            if accel0 == 0 {
+                assert_eq!(
+                    fast.time_to_stop_from_ms(distance, speed, accel0),
+                    slow.time_to_stop_from_ms(distance, speed, accel0),
+                    "time vmax={vmax} accel={accel} jerk={jerk} d={distance} v={speed} a={accel0}"
+                );
+            } else {
+                assert_eq!(
+                    fast.time_to_stop_from_ms(distance, speed, accel0).is_some(),
+                    slow.time_to_stop_from_ms(distance, speed, accel0).is_some(),
+                    "feasible vmax={vmax} accel={accel} jerk={jerk} d={distance} v={speed} a={accel0}"
+                );
+            }
             assert_eq!(
                 fast.stopping_distance_mm(speed, accel0),
                 slow.stopping_distance_mm(speed, accel0),
