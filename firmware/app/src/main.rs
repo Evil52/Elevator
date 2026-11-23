@@ -10,6 +10,7 @@ use defmt_rtt as _;
 use elevator_fw_logic::button::ButtonEvent;
 use elevator_fw_logic::progress::Verdict;
 use elevator_fw_logic::reset::{ResetCause, ResetFlags, reset_cause};
+use elevator_fw_logic::supervisor::State;
 use elevator_fw_logic::telemetry::Telemetry;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
@@ -93,6 +94,25 @@ fn enable_flash_accelerator() {
     });
 }
 
+const fn state_name(state: State) -> &'static str {
+    match state {
+        State::Boot => "boot",
+        State::SelfCheck => "self check",
+        State::InputsReady => "inputs ready",
+        State::Running => "running",
+        State::Fault => "fault",
+        State::Recovery => "recovery",
+    }
+}
+
+#[embassy_executor::task]
+async fn report_state() {
+    loop {
+        let state = control::SUPERVISOR.wait().await;
+        info!("supervisor: {}", state_name(state));
+    }
+}
+
 const fn cause_name(cause: ResetCause) -> &'static str {
     match cause {
         ResetCause::IndependentWatchdog => "independent watchdog",
@@ -157,10 +177,12 @@ async fn main(low_spawner: Spawner) {
     core.DCB.enable_trace();
     core.DWT.enable_cycle_counter();
     let led = Output::new(p.PB0, Level::Low, Speed::Low);
+    let led3 = Output::new(p.PB14, Level::Low, Speed::Low);
     info!("reset cause: {}", cause_name(cause));
     let mut rng = Rng::new(p.RNG, irq::Irqs);
     let mut random = [0_u8; 4];
-    let boot_id = if rng.async_fill_bytes(&mut random).await.is_ok() {
+    let rng_ok = rng.async_fill_bytes(&mut random).await.is_ok();
+    let boot_id = if rng_ok {
         u32::from_le_bytes(random)
     } else {
         0
@@ -182,7 +204,15 @@ async fn main(low_spawner: Spawner) {
     let b1 = Input::new(p.PC13, Pull::None);
     interrupt::UART4.set_priority(Priority::P6);
     let high_spawner = irq::CONTROL_EXECUTOR.start(interrupt::UART4);
-    if let Ok(token) = control::run(led, b1, cycles_per_us) {
+    let clock_ok = clocks.sys.to_hertz().is_some_and(|hz| hz.0 == 180_000_000);
+    let self_check_ok = rng_ok && clock_ok && uart.is_ok();
+    info!(
+        "self check: rng {} clock {} uart {}",
+        rng_ok,
+        clock_ok,
+        uart.is_ok()
+    );
+    if let Ok(token) = control::run(led, led3, b1, cycles_per_us, self_check_ok) {
         high_spawner.spawn(token);
     } else {
         error!("control task did not start");
@@ -206,6 +236,11 @@ async fn main(low_spawner: Spawner) {
         low_spawner.spawn(token);
     } else {
         error!("watchdog task did not start");
+    }
+    if let Ok(token) = report_state() {
+        low_spawner.spawn(token);
+    } else {
+        error!("state report task did not start");
     }
     if let Ok(token) = report_button() {
         low_spawner.spawn(token);

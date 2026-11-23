@@ -185,3 +185,14 @@ fn eviction_takes_the_oldest_cleared_alarm_first() {
     assert_eq!(table.get(1), None);
     assert!(table.get(2).is_some());
 }
+
+#[test]
+fn has_active_looks_only_at_active_alarms_of_the_listed_kinds() {
+    let mut table = AlarmTable::<4>::new();
+    assert!(!table.has_active(&[AlarmKind::CarFault, AlarmKind::FireRecall]));
+    table.raise(AlarmKind::FireRecall, None, 1).ok();
+    assert!(table.has_active(&[AlarmKind::CarFault, AlarmKind::FireRecall]));
+    assert!(!table.has_active(&[AlarmKind::CarFault]));
+    table.acknowledge(1).ok();
+    assert!(!table.has_active(&[AlarmKind::FireRecall]));
+}

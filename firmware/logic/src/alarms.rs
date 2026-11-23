@@ -89,6 +89,14 @@ impl<const N: usize> AlarmTable<N> {
     }
 
     #[must_use]
+    pub fn has_active(&self, kinds: &[AlarmKind]) -> bool {
+        self.items
+            .iter()
+            .flatten()
+            .any(|alarm| alarm.state == AlarmState::Active && kinds.contains(&alarm.kind))
+    }
+
+    #[must_use]
     pub fn total(&self) -> u16 {
         u16::try_from(self.items.iter().flatten().count()).unwrap_or(u16::MAX)
     }

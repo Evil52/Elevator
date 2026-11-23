@@ -6,9 +6,12 @@ pub mod alarms;
 pub mod button;
 pub mod commands;
 pub mod events;
+pub mod health;
+pub mod outputs;
 pub mod progress;
 pub mod reset;
 pub mod scenario;
+pub mod supervisor;
 pub mod telemetry;
 
 #[must_use]
