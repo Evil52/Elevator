@@ -1,5 +1,6 @@
 pub mod hub;
 pub mod journal;
+pub mod link;
 pub mod origin;
 pub mod server;
 
@@ -71,6 +72,11 @@ impl Bridge {
             }
         }
         envelopes
+    }
+
+    pub fn reset_stream(&mut self) {
+        self.decoder = Decoder::new();
+        self.expected_frame_seq = None;
     }
 
     #[must_use]

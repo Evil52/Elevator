@@ -78,6 +78,16 @@ impl Journal {
         self.push(line.to_string());
     }
 
+    pub fn record_link(&mut self, now_ms: u64, up: bool) {
+        if self.capacity == 0 {
+            self.dropped += 1;
+            return;
+        }
+        let state = if up { "up" } else { "down" };
+        let line = json!({"t": now_ms, "dir": "link", "state": state});
+        self.push(line.to_string());
+    }
+
     fn push(&mut self, line: String) {
         if let Some(sink) = self.sink.as_mut()
             && sink
