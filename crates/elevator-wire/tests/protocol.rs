@@ -368,6 +368,8 @@ fn commands() -> Vec<Envelope> {
                 action: SimAction::Reset,
             }),
         ),
+        sim_action(SimAction::FireRecall),
+        sim_action(SimAction::ClearFire),
     ]
 }
 
@@ -453,6 +455,41 @@ fn an_unknown_alarm_kind_is_malformed() {
     assert_ne!(bytes.len(), 0, "nothing encoded");
     bytes[9] = 0x09;
     assert_eq!(decode_message(&bytes), Err(MessageError::Malformed));
+}
+
+fn sim_action(action: SimAction) -> Envelope {
+    Envelope::new(
+        1,
+        2,
+        3,
+        Message::SimControl(SimControl {
+            request_id: 5,
+            action,
+        }),
+    )
+}
+
+#[test]
+fn fire_commands_have_known_bytes() {
+    for (action, last) in [
+        (SimAction::Pause, 0x00),
+        (SimAction::Resume, 0x01),
+        (SimAction::Reset, 0x02),
+        (SimAction::FireRecall, 0x03),
+        (SimAction::ClearFire, 0x04),
+    ] {
+        let expected = [0x01, 0x01, 0x02, 0x03, 0x08, 0x05, last];
+        assert_eq!(encoded(&sim_action(action)), expected, "{action:?}");
+        assert_eq!(decode_message(&expected), Ok(sim_action(action)));
+    }
+}
+
+#[test]
+fn the_first_value_after_the_last_sim_action_is_malformed() {
+    assert_eq!(
+        decode_message(&[0x01, 0x01, 0x02, 0x03, 0x08, 0x05, 0x05]),
+        Err(MessageError::Malformed)
+    );
 }
 
 #[test]

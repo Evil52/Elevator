@@ -909,3 +909,159 @@ fn the_reported_acceleration_never_exceeds_the_configured_limit() {
         }
     }
 }
+
+fn recall(car: &mut Car, millis: u32) {
+    for _ in 0..millis {
+        car.step(1, CarMode::FireRecall, Targets::default());
+    }
+}
+
+fn recall_until(car: &mut Car, limit_ms: u32, done: impl Fn(&Car) -> bool) -> u32 {
+    let mut elapsed = 0;
+    while !done(car) && elapsed < limit_ms {
+        car.step(1, CarMode::FireRecall, Targets::default());
+        elapsed += 1;
+    }
+    elapsed
+}
+
+#[test]
+fn a_recalled_car_at_rest_goes_to_the_main_floor_and_holds_its_doors_open() {
+    let mut car = Car::new(params(), 5);
+    let waited = recall_until(&mut car, 60_000, arrived);
+    assert!(waited < 60_000);
+    assert_eq!(car.stopped_at(), Some(1));
+    recall(&mut car, 120_000);
+    assert_eq!(car.stopped_at(), Some(1));
+    assert_eq!(car.doors(), DoorState::Open);
+}
+
+#[test]
+fn a_recalled_car_at_the_main_floor_opens_its_doors_and_keeps_them_open() {
+    let mut car = Car::new(params(), 1);
+    recall(&mut car, 60_000);
+    assert_eq!(car.doors(), DoorState::Open);
+    assert_eq!(car.position_mm(), 0);
+}
+
+#[test]
+fn closing_doors_at_the_main_floor_open_again_on_recall() {
+    let mut car = Car::new(params(), 1);
+    run_until(&mut car, up(&[1]), 60_000, |car| {
+        car.doors() == DoorState::Closing
+    });
+    assert_eq!(car.doors(), DoorState::Closing);
+    car.step(1, CarMode::FireRecall, Targets::default());
+    assert_eq!(car.doors(), DoorState::Opening);
+    recall(&mut car, 60_000);
+    assert_eq!(car.doors(), DoorState::Open);
+}
+
+#[test]
+fn a_recalled_car_going_up_stops_at_the_first_reachable_floor_with_closed_doors() {
+    let mut car = Car::new(params(), 1);
+    drive(&mut car, up(&[10]), 2300);
+    let expected = first_floor_still_reachable(&car);
+    assert!(expected < 10);
+    let waited = recall_until(&mut car, 60_000, |car| {
+        car.stopped_at().is_some() && car.speed_mm_s() == 0
+    });
+    assert!(waited < 60_000);
+    assert_eq!(car.stopped_at(), Some(expected));
+    assert_eq!(car.doors(), DoorState::Closed);
+}
+
+#[test]
+fn a_recalled_car_going_up_then_returns_to_the_main_floor() {
+    for departed_ms in [900, 2300, 4000] {
+        let mut car = Car::new(params(), 3);
+        drive(&mut car, up(&[10]), departed_ms);
+        let waited = recall_until(&mut car, 120_000, |car| {
+            car.stopped_at() == Some(1) && car.doors() == DoorState::Open
+        });
+        assert!(waited < 120_000, "departed {departed_ms}");
+        assert_eq!(car.position_mm(), 0);
+    }
+}
+
+#[test]
+fn a_recalled_car_going_down_continues_to_the_main_floor_without_stopping() {
+    let mut car = Car::new(params(), 10);
+    drive(&mut car, down(&[4]), 3000);
+    let mut stopped_between = false;
+    let mut elapsed = 0;
+    while !arrived(&car) {
+        car.step(1, CarMode::FireRecall, Targets::default());
+        stopped_between |= car.speed_mm_s() == 0 && car.stopped_at().is_some_and(|f| f != 1);
+        elapsed += 1;
+        assert!(elapsed < 120_000);
+    }
+    assert!(!stopped_between);
+    assert_eq!(car.stopped_at(), Some(1));
+}
+
+#[test]
+fn a_recalled_car_with_open_doors_finishes_the_cycle_then_leaves() {
+    let mut car = Car::new(params(), 5);
+    run_until(&mut car, up(&[5]), 60_000, |car| {
+        car.doors() == DoorState::Open
+    });
+    assert_eq!(car.doors(), DoorState::Open);
+    car.step(1, CarMode::FireRecall, Targets::default());
+    assert_ne!(car.doors(), DoorState::Closed);
+    let waited = recall_until(&mut car, 120_000, |car| {
+        car.stopped_at() == Some(1) && car.doors() == DoorState::Open
+    });
+    assert!(waited < 120_000);
+}
+
+#[test]
+fn a_recalled_car_changes_its_trip_without_jumps() {
+    for departed_ms in [700, 1500, 3000, 5000] {
+        let mut car = Car::new(params(), 2);
+        drive(&mut car, up(&[10]), departed_ms);
+        let mut previous = (car.position_mm(), car.speed_mm_s(), car.accel_mm_s2());
+        let mut elapsed = 0;
+        while !(car.stopped_at() == Some(1) && car.doors() == DoorState::Open) {
+            car.step(1, CarMode::FireRecall, Targets::default());
+            let now = (car.position_mm(), car.speed_mm_s(), car.accel_mm_s2());
+            let at = format!("departed {departed_ms} t={elapsed} {previous:?} -> {now:?}");
+            assert!(now.0.abs_diff(previous.0) <= 2, "{at}");
+            assert!(now.1.abs_diff(previous.1) <= 2, "{at}");
+            assert!(now.2.abs_diff(previous.2) <= 12, "{at}");
+            previous = now;
+            elapsed += 1;
+            assert!(elapsed < 120_000, "{at}");
+        }
+    }
+}
+
+#[test]
+fn a_failed_car_ignores_the_recall() {
+    let mut car = Car::new(params(), 5);
+    for _ in 0..10_000 {
+        car.step(1, CarMode::Unavailable, Targets::default());
+    }
+    assert_eq!(car.stopped_at(), Some(5));
+}
+
+#[test]
+fn doors_held_open_by_the_recall_close_again_when_it_is_over() {
+    let mut car = Car::new(params(), 1);
+    recall(&mut car, 30_000);
+    assert_eq!(car.doors(), DoorState::Open);
+    let waited = run_until(&mut car, Targets::default(), 60_000, |car| {
+        car.doors() == DoorState::Closed
+    });
+    assert!(waited < 60_000);
+}
+
+#[test]
+fn the_calls_given_to_a_recalled_car_are_ignored() {
+    let mut car = Car::new(params(), 5);
+    for _ in 0..120_000 {
+        car.step(1, CarMode::FireRecall, up(&[9]));
+    }
+    assert_eq!(car.stopped_at(), Some(1));
+    assert_eq!(car.doors(), DoorState::Open);
+}

@@ -69,10 +69,20 @@ impl Car {
     }
 
     pub fn step(&mut self, dt_ms: u32, mode: CarMode, targets: Targets) {
+        let recall = mode == CarMode::FireRecall;
+        let targets = if recall {
+            Targets { up: 0, down: 1 }
+        } else {
+            targets
+        };
         match self.drive {
             Drive::Trip { .. } => self.drive_trip(dt_ms, mode, targets),
             Drive::Braking { .. } => self.drive_braking(dt_ms),
             Drive::Rest => {
+                if recall && self.stopped_at() == Some(1) {
+                    self.hold_doors_open(dt_ms);
+                    return;
+                }
                 self.advance_doors(dt_ms);
                 if mode != CarMode::Unavailable && self.cycle == Cycle::Closed {
                     self.depart(dt_ms, mode, targets);
@@ -142,6 +152,20 @@ impl Car {
 
     fn top_position(&self) -> u32 {
         self.floor_position(u32::from(self.params.floors))
+    }
+
+    fn hold_doors_open(&mut self, dt_ms: u32) {
+        if matches!(self.cycle, Cycle::Closed | Cycle::Closing(_)) {
+            self.cycle = Cycle::Opening(0);
+        }
+        if let Cycle::Opening(elapsed) = self.cycle {
+            let elapsed = elapsed.saturating_add(dt_ms);
+            self.cycle = if elapsed >= self.params.open_ms {
+                Cycle::Open(0)
+            } else {
+                Cycle::Opening(elapsed)
+            };
+        }
     }
 
     fn advance_doors(&mut self, dt_ms: u32) {
@@ -320,7 +344,11 @@ impl Car {
             self.position_mm = to_mm;
             self.speed_mm_s = 0;
             self.drive = Drive::Rest;
-            self.cycle = Cycle::Opening(0);
+            self.cycle = if mode == CarMode::FireRecall && to_mm != 0 {
+                Cycle::Closed
+            } else {
+                Cycle::Opening(0)
+            };
         } else {
             self.drive = Drive::Trip {
                 from_mm,

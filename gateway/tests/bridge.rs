@@ -232,6 +232,27 @@ fn every_command_kind_is_forwarded() {
 }
 
 #[test]
+fn fire_commands_travel_through_json_and_back() {
+    let mut bridge = Bridge::new();
+    for (name, action) in [
+        ("fireRecall", SimAction::FireRecall),
+        ("clearFire", SimAction::ClearFire),
+    ] {
+        let json = format!(
+            r#"{{"version":1,"bootId":1,"runId":1,"seq":0,"message":{{"simControl":{{"requestId":9,"action":"{name}"}}}}}}"#
+        );
+        let bytes = bridge.command_frame(&json).expect("frame");
+        assert_eq!(
+            unframe(&bytes).1.message,
+            Message::SimControl(SimControl {
+                request_id: 9,
+                action
+            })
+        );
+    }
+}
+
+#[test]
 fn a_gap_across_the_wrap_is_counted_by_distance() {
     let mut bridge = Bridge::new();
     bridge.feed(&frame_of(254, &snapshot(0)));

@@ -256,6 +256,44 @@ fn pause_and_resume_apply_once_each() {
 }
 
 #[test]
+fn fire_recall_and_clear_fire_apply_once_each() {
+    let mut scenario = running();
+    assert_eq!(
+        run(&mut scenario, sim(1, SimAction::ClearFire)),
+        reply(1, CommandStatus::Rejected(Rejection::WrongState))
+    );
+    assert_eq!(
+        run(&mut scenario, sim(2, SimAction::FireRecall)),
+        reply(2, CommandStatus::Applied)
+    );
+    assert!(scenario.is_fire());
+    assert_eq!(
+        run(&mut scenario, sim(3, SimAction::FireRecall)),
+        reply(3, CommandStatus::Rejected(Rejection::WrongState))
+    );
+    assert_eq!(
+        run(&mut scenario, sim(4, SimAction::ClearFire)),
+        reply(4, CommandStatus::Applied)
+    );
+    assert!(!scenario.is_fire());
+    assert_eq!(
+        run(&mut scenario, sim(5, SimAction::ClearFire)),
+        reply(5, CommandStatus::Rejected(Rejection::WrongState))
+    );
+}
+
+#[test]
+fn reset_ends_a_fire_recall() {
+    let mut scenario = running();
+    run(&mut scenario, sim(1, SimAction::FireRecall));
+    assert_eq!(
+        run(&mut scenario, sim(2, SimAction::Reset)),
+        reply(2, CommandStatus::Applied)
+    );
+    assert!(!scenario.is_fire());
+}
+
+#[test]
 fn reset_restarts_the_scenario_and_clears_failures() {
     let mut scenario = running();
     run(&mut scenario, inject(1, 2));

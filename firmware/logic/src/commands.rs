@@ -72,6 +72,8 @@ fn sim_control(command: SimControl, scenario: &mut Scenario) -> CommandStatus {
         SimAction::Pause => scenario.set_paused(true),
         SimAction::Resume => scenario.set_paused(false),
         SimAction::Reset => scenario.reset().is_some(),
+        SimAction::FireRecall => scenario.fire_recall().is_ok(),
+        SimAction::ClearFire => scenario.clear_fire().is_ok(),
     };
     applied(changed.then_some(()).ok_or(Rejection::WrongState))
 }

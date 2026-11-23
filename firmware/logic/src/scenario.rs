@@ -53,6 +53,7 @@ pub struct Scenario {
     assigned: [Targets; CARS],
     last_step_ms: u64,
     paused: bool,
+    fire: bool,
     log: EventLog<LOG_CAPACITY>,
     alarms: AlarmTable<ALARM_CAPACITY>,
     alarm_version: u32,
@@ -119,6 +120,7 @@ impl Scenario {
             assigned: [Targets::default(); CARS],
             last_step_ms: 0,
             paused: false,
+            fire: false,
             log: EventLog::new(),
             alarms: AlarmTable::new(),
             alarm_version: 0,
@@ -139,6 +141,7 @@ impl Scenario {
         self.plants = new_plants();
         self.doors = [DoorState::Closed; CARS];
         self.assigned = [Targets::default(); CARS];
+        self.fire = false;
     }
 
     fn forget_history(&mut self) {
@@ -193,9 +196,46 @@ impl Scenario {
         if input.state.mode != CarMode::Unavailable {
             return Err(CarError::WrongState);
         }
-        input.state.mode = CarMode::Normal;
+        input.state.mode = if self.fire {
+            CarMode::FireRecall
+        } else {
+            CarMode::Normal
+        };
         self.clear_alarm(AlarmKind::CarFault, u8::try_from(car).ok());
         Ok(())
+    }
+
+    pub fn fire_recall(&mut self) -> Result<(), CarError> {
+        if self.fire {
+            return Err(CarError::WrongState);
+        }
+        self.fire = true;
+        for input in &mut self.cars {
+            if input.state.mode == CarMode::Normal {
+                input.state.mode = CarMode::FireRecall;
+            }
+        }
+        self.raise_alarm(AlarmKind::FireRecall, None);
+        Ok(())
+    }
+
+    pub fn clear_fire(&mut self) -> Result<(), CarError> {
+        if !self.fire {
+            return Err(CarError::WrongState);
+        }
+        self.fire = false;
+        for input in &mut self.cars {
+            if input.state.mode == CarMode::FireRecall {
+                input.state.mode = CarMode::Normal;
+            }
+        }
+        self.clear_alarm(AlarmKind::FireRecall, None);
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn is_fire(&self) -> bool {
+        self.fire
     }
 
     pub const fn set_paused(&mut self, paused: bool) -> bool {
@@ -267,10 +307,19 @@ impl Scenario {
             dispatcher,
             cars,
             log,
+            fire,
             ..
         } = self;
+        let view = if *fire {
+            cars.map(|mut car| {
+                car.state.mode = CarMode::FireRecall;
+                car
+            })
+        } else {
+            *cars
+        };
         if let Some(dispatcher) = dispatcher.as_mut() {
-            dispatcher.step(now_ms, cars, |event| {
+            dispatcher.step(now_ms, &view, |event| {
                 events.assigned += usize::from(matches!(event, Event::Assigned(_)));
                 events.requeued += usize::from(matches!(event, Event::Requeued { .. }));
                 overflowed |= log_event(log, now_ms, event);
