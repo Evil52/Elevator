@@ -8,7 +8,8 @@ use core::sync::atomic::Ordering;
 use elevator_fw_logic::button::{Button, ButtonEvent};
 use elevator_fw_logic::commands::{Reply, answer};
 use elevator_fw_logic::health::{OverrunWatch, StuckInput};
-use elevator_fw_logic::outputs::led3_on;
+use elevator_fw_logic::link_watch::LinkMonitor;
+use elevator_fw_logic::outputs::{led2_on, led3_on};
 use elevator_fw_logic::progress::ProgressMonitor;
 use elevator_fw_logic::scenario::{CARS, Scenario};
 use elevator_fw_logic::supervisor::{Inputs, State, Supervisor};
@@ -45,6 +46,8 @@ pub static PROGRESS: Mutex<CriticalSectionRawMutex, RefCell<ProgressMonitor<MAND
     Mutex::new(RefCell::new(ProgressMonitor::new()));
 
 pub static SUPERVISOR: Signal<CriticalSectionRawMutex, State> = Signal::new();
+
+pub static LINK: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 
 pub static BUTTON: Signal<CriticalSectionRawMutex, (ButtonEvent, bool)> = Signal::new();
 
@@ -85,10 +88,6 @@ impl Health {
         }
     }
 
-    fn outputs_enabled(&self) -> bool {
-        self.supervisor.outputs_enabled()
-    }
-
     fn tick(&mut self, now_ms: u64, pressed: bool, late: bool) -> (State, bool) {
         let stuck = self.stuck.update(now_ms, pressed);
         let verdict = self.overruns.update(late);
@@ -106,14 +105,52 @@ impl Health {
     }
 }
 
+struct GatewayLink {
+    monitor: LinkMonitor,
+    up: bool,
+}
+
+impl GatewayLink {
+    const fn new() -> Self {
+        Self {
+            monitor: LinkMonitor::new(),
+            up: false,
+        }
+    }
+
+    fn poll(&mut self, now_ms: u64) -> bool {
+        let heard = self
+            .monitor
+            .update(now_ms, crate::link::LINK_FRAMES.load(Ordering::Relaxed));
+        if heard != self.up {
+            self.up = heard;
+            LINK.signal(heard);
+        }
+        self.up
+    }
+}
+
+pub struct Leds {
+    pub green: Output<'static>,
+    pub blue: Output<'static>,
+    pub red: Output<'static>,
+}
+
+fn level(on: bool) -> Level {
+    if on { Level::High } else { Level::Low }
+}
+
+impl Leds {
+    fn show(&mut self, now_ms: u64, phase: State, link_up: bool, critical: bool) {
+        let blink = phase == State::Running && led_on(now_ms, BLINK_PERIOD_MS);
+        self.green.set_level(level(blink));
+        self.blue.set_level(level(led2_on(phase, link_up)));
+        self.red.set_level(level(led3_on(phase, critical)));
+    }
+}
+
 #[embassy_executor::task]
-pub async fn run(
-    mut led: Output<'static>,
-    mut led3: Output<'static>,
-    b1: Input<'static>,
-    cycles_per_us: u32,
-    self_check_ok: bool,
-) {
+pub async fn run(mut leds: Leds, b1: Input<'static>, cycles_per_us: u32, self_check_ok: bool) {
     let period = Duration::from_micros(u64::from(CONTROL_PERIOD_US.get()));
     let mut stats = JitterStats::new(CONTROL_PERIOD_US);
     let period_cycles = NonZeroU32::new(CONTROL_PERIOD_US.get().saturating_mul(cycles_per_us))
@@ -122,6 +159,7 @@ pub async fn run(
     let mut scenario = Scenario::new();
     let mut button = Button::new();
     let mut health = Health::new(self_check_ok);
+    let mut gateway = GatewayLink::new();
     let start = Instant::now();
     fresh(&mut scenario, start.as_millis());
     let mut deadline = start + period;
@@ -141,18 +179,13 @@ pub async fn run(
         if changed {
             SUPERVISOR.signal(phase);
         }
-        led.set_level(
-            if health.outputs_enabled() && led_on(deadline.as_millis(), BLINK_PERIOD_MS) {
-                Level::High
-            } else {
-                Level::Low
-            },
+        let link_up = gateway.poll(deadline.as_millis());
+        leds.show(
+            deadline.as_millis(),
+            phase,
+            link_up,
+            scenario.critical_alarm_active(),
         );
-        led3.set_level(if led3_on(phase, scenario.critical_alarm_active()) {
-            Level::High
-        } else {
-            Level::Low
-        });
         if let Some(event) = button.update(deadline.as_millis(), pressed) {
             let failed = match event {
                 ButtonEvent::Short => scenario.toggle_failure(0),

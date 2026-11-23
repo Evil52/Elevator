@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use elevator_gateway::link::supervise;
+use elevator_gateway::link::{PING_EVERY, heartbeat, supervise};
 use elevator_gateway::{Gateway, Journal, OriginPolicy};
 use serialport::SerialPort;
 
@@ -100,6 +100,8 @@ fn main() {
     thread::spawn(move || server.serve(&listener));
 
     gateway.set_writer(None);
+    let pinger = Arc::clone(&gateway);
+    thread::spawn(move || heartbeat(&pinger, PING_EVERY, thread::sleep, || false));
     let board = Arc::clone(&gateway);
     let path = options.port.clone();
     let supervisor = thread::spawn(move || {

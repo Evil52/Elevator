@@ -1,5 +1,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use elevator_fw_logic::link_watch::needs_control;
 use elevator_fw_logic::reset::ResetCause;
 use elevator_fw_logic::scenario::CARS;
 use elevator_fw_logic::telemetry::Telemetry;
@@ -19,6 +20,7 @@ pub static COMMANDS: Channel<CriticalSectionRawMutex, Envelope, 4> = Channel::ne
 pub static REPLIES: Channel<CriticalSectionRawMutex, CommandResult, 4> = Channel::new();
 pub static ALARM_PAGES: Signal<CriticalSectionRawMutex, [AlarmPage; 2]> = Signal::new();
 pub static LOG_CHUNKS: Channel<CriticalSectionRawMutex, EventLogChunk, 2> = Channel::new();
+pub static LINK_FRAMES: AtomicU32 = AtomicU32::new(0);
 pub static BOOT_ID: AtomicU32 = AtomicU32::new(0);
 pub static RUN_ID: AtomicU32 = AtomicU32::new(1);
 
@@ -87,7 +89,10 @@ pub async fn receive(rx: UartRx<'static, Async>) {
                 continue;
             };
             if let Ok(envelope) = decode_message(&payload[..length]) {
-                let _ = COMMANDS.try_send(envelope);
+                LINK_FRAMES.fetch_add(1, Ordering::Relaxed);
+                if needs_control(&envelope) {
+                    let _ = COMMANDS.try_send(envelope);
+                }
             }
         }
     }

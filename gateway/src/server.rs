@@ -97,6 +97,14 @@ impl Gateway {
         }
     }
 
+    pub fn ping_board(&self) -> bool {
+        let frame = match self.bridge.lock() {
+            Ok(mut bridge) => bridge.ping_frame(),
+            Err(_) => return false,
+        };
+        frame.is_ok_and(|bytes| self.send_to_board(&bytes))
+    }
+
     pub fn set_writer(&self, writer: Option<Box<dyn Write + Send>>) {
         if let Ok(mut guard) = self.writer.lock() {
             *guard = writer;

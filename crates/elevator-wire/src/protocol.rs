@@ -262,6 +262,14 @@ pub struct ReadLog {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct Ping {
+    pub counter: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum Message {
     Hello(Hello),
     CarSnapshot(CarSnapshot),
@@ -274,6 +282,7 @@ pub enum Message {
     SimControl(SimControl),
     EventLogChunk(EventLogChunk),
     ReadLog(ReadLog),
+    Ping(Ping),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -7,7 +7,7 @@ use protocol_schema::{
 };
 use serde_json::Value;
 
-const MESSAGE_KINDS: [&str; 11] = [
+const MESSAGE_KINDS: [&str; 12] = [
     "hello",
     "car_snapshot",
     "call_floor",
@@ -19,6 +19,7 @@ const MESSAGE_KINDS: [&str; 11] = [
     "sim_control",
     "event_log_chunk",
     "read_log",
+    "ping",
 ];
 
 fn protocol_dir() -> PathBuf {

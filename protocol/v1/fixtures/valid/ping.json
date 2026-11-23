@@ -1,0 +1,11 @@
+{
+  "bootId": 1,
+  "message": {
+    "ping": {
+      "counter": 14
+    }
+  },
+  "runId": 2,
+  "seq": 3,
+  "version": 1
+}

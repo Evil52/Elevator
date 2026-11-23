@@ -106,6 +106,14 @@ const fn state_name(state: State) -> &'static str {
 }
 
 #[embassy_executor::task]
+async fn report_link() {
+    loop {
+        let up = control::LINK.wait().await;
+        info!("gateway link: {}", if up { "up" } else { "down" });
+    }
+}
+
+#[embassy_executor::task]
 async fn report_state() {
     loop {
         let state = control::SUPERVISOR.wait().await;
@@ -177,6 +185,7 @@ async fn main(low_spawner: Spawner) {
     core.DCB.enable_trace();
     core.DWT.enable_cycle_counter();
     let led = Output::new(p.PB0, Level::Low, Speed::Low);
+    let led2 = Output::new(p.PB7, Level::Low, Speed::Low);
     let led3 = Output::new(p.PB14, Level::Low, Speed::Low);
     info!("reset cause: {}", cause_name(cause));
     let mut rng = Rng::new(p.RNG, irq::Irqs);
@@ -212,7 +221,16 @@ async fn main(low_spawner: Spawner) {
         clock_ok,
         uart.is_ok()
     );
-    if let Ok(token) = control::run(led, led3, b1, cycles_per_us, self_check_ok) {
+    if let Ok(token) = control::run(
+        control::Leds {
+            green: led,
+            blue: led2,
+            red: led3,
+        },
+        b1,
+        cycles_per_us,
+        self_check_ok,
+    ) {
         high_spawner.spawn(token);
     } else {
         error!("control task did not start");
@@ -236,6 +254,11 @@ async fn main(low_spawner: Spawner) {
         low_spawner.spawn(token);
     } else {
         error!("watchdog task did not start");
+    }
+    if let Ok(token) = report_link() {
+        low_spawner.spawn(token);
+    } else {
+        error!("link report task did not start");
     }
     if let Ok(token) = report_state() {
         low_spawner.spawn(token);

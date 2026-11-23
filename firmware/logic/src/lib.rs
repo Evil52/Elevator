@@ -8,6 +8,7 @@ pub mod car;
 pub mod commands;
 pub mod events;
 pub mod health;
+pub mod link_watch;
 pub mod outputs;
 pub mod progress;
 pub mod reset;

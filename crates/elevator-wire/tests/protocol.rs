@@ -2,7 +2,7 @@ use elevator_wire::protocol::{
     ALARMS_PER_PAGE, AckAlarm, Alarm, AlarmKind, AlarmPage, AlarmState, CallFloor, CarMode,
     CarSnapshot, CommandResult, CommandStatus, Direction, DoorState, EVENTS_PER_CHUNK, Envelope,
     Event, EventKind, EventLogChunk, Hello, InjectFault, JSON_SAFE_MAX, Message, MessageError,
-    ReadLog, RecoverCar, Rejection, ResetReason, SimAction, SimControl, decode_message,
+    Ping, ReadLog, RecoverCar, Rejection, ResetReason, SimAction, SimControl, decode_message,
     encode_message,
 };
 use elevator_wire::{Decoder, MAX_FRAME, MAX_PAYLOAD, decode_frame, encode_frame};
@@ -562,6 +562,10 @@ fn read_log() -> Envelope {
     )
 }
 
+fn ping() -> Envelope {
+    Envelope::new(1, 2, 3, Message::Ping(Ping { counter: 5 }))
+}
+
 fn full_chunk_at_the_limits() -> Envelope {
     let first = u32::MAX - u32::try_from(EVENTS_PER_CHUNK - 1).unwrap();
     let events: [_; EVENTS_PER_CHUNK] = core::array::from_fn(|i| {
@@ -604,6 +608,7 @@ fn event_log_chunks_round_trip() {
         chunk_of(5, 3, &all_kinds),
         full_chunk_at_the_limits(),
         read_log(),
+        ping(),
     ] {
         let bytes = encoded(&envelope);
         assert_ne!(bytes.len(), 0, "nothing encoded for {envelope:?}");
@@ -623,6 +628,19 @@ fn read_log_has_known_bytes() {
     let expected = [0x01, 0x01, 0x02, 0x03, 0x0A, 0x05, 0xAC, 0x02];
     assert_eq!(encoded(&read_log()), expected);
     assert_eq!(decode_message(&expected), Ok(read_log()));
+}
+
+#[test]
+fn ping_has_known_bytes() {
+    let expected = [0x01, 0x01, 0x02, 0x03, 0x0B, 0x05];
+    assert_eq!(encoded(&ping()), expected);
+    assert_eq!(decode_message(&expected), Ok(ping()));
+}
+
+#[test]
+fn ping_counter_uses_the_full_u32_range() {
+    let envelope = Envelope::new(1, 2, 3, Message::Ping(Ping { counter: u32::MAX }));
+    assert_eq!(decode_message(&encoded(&envelope)), Ok(envelope));
 }
 
 #[test]
