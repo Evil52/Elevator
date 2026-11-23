@@ -1,4 +1,4 @@
-import type { Alarm, CarSnapshot } from '@elevator/protocol-v1'
+import type { Alarm, CarSnapshot, Event } from '@elevator/protocol-v1'
 
 export const MODE_TEXT: Record<CarSnapshot['mode'], string> = {
   normal: 'Работает',
@@ -36,4 +36,19 @@ export const REJECTION_TEXT: Record<string, string> = {
   noSuchAlarm: 'такой тревоги нет',
   noSuchCar: 'такой кабины нет',
   wrongState: 'сейчас так сделать нельзя',
+}
+
+export const EVENT_KIND_TEXT: Record<Event['kind'], string> = {
+  assigned: 'Назначен вызов',
+  arrived: 'Кабина прибыла',
+  served: 'Вызов обслужен',
+  requeued: 'Вызов возвращён в очередь',
+  cancelled: 'Вызов отменён',
+  alarmRaised: 'Тревога поднята',
+  alarmAcked: 'Тревога подтверждена',
+  alarmCleared: 'Тревога снята',
+}
+
+export function formatSeconds(milliseconds: number): string {
+  return `${(milliseconds / 1000).toFixed(1).replace('.', ',')} с`
 }
