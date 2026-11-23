@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 
+use elevator_ctrl::calls::Press;
 use elevator_ctrl::eta::{Call, Direction};
 use elevator_fw_logic::scenario::{CALLS, CARS, Scenario};
 use elevator_wire::protocol::{DoorState, Event, EventKind};
@@ -342,4 +343,73 @@ fn the_dispatcher_counts_the_door_cycle_of_a_car_that_is_busy_at_its_floor() {
     assert_eq!(assigned.len(), 2);
     assert_eq!(assigned[0].car, Some(0));
     assert_eq!(assigned[1].car, Some(1));
+}
+
+fn created(scenario: &mut Scenario, pressed: Call, now: u64) -> u32 {
+    let pressed = scenario.press(pressed, now).expect("press");
+    assert!(matches!(pressed, Press::Created(_)), "{pressed:?}");
+    match pressed {
+        Press::Created(id) | Press::Duplicate(id) => id,
+    }
+}
+
+fn first_event(scenario: &Scenario, kind: EventKind, id: u32) -> Event {
+    events_of(scenario)
+        .into_iter()
+        .find(|event| event.kind == kind && event.id == id)
+        .expect("event")
+}
+
+fn speed_of(scenario: &Scenario, car: usize) -> i32 {
+    scenario
+        .car_snapshot(car, 0)
+        .expect("snapshot")
+        .speed_mm_per_sec
+}
+
+#[test]
+fn a_call_pressed_ahead_of_a_moving_car_is_served_on_its_way() {
+    let mut scenario = started();
+    let mut now = 0;
+    let far = created(&mut scenario, call(7, Direction::Up), now);
+    assert!(running_until(&mut scenario, &mut now, 2_000, |s| speed_of(
+        s, 1
+    ) > 0));
+    advance(&mut scenario, &mut now, 300);
+    let near = created(&mut scenario, call(6, Direction::Up), now);
+    assert!(running_until(&mut scenario, &mut now, 60_000, |s| {
+        count(s, EventKind::Arrived) == 2
+    }));
+    assert_eq!(
+        first_event(&scenario, EventKind::Assigned, far).car,
+        Some(1)
+    );
+    assert_eq!(
+        first_event(&scenario, EventKind::Assigned, near).car,
+        Some(1)
+    );
+    let near_arrived = first_event(&scenario, EventKind::Arrived, near);
+    let far_arrived = first_event(&scenario, EventKind::Arrived, far);
+    assert!(near_arrived.index < far_arrived.index);
+    assert!(far_arrived.at_ms - near_arrived.at_ms < 20_000);
+}
+
+#[test]
+fn a_call_an_accelerating_car_can_no_longer_stop_for_goes_to_another_car() {
+    let mut scenario = started();
+    let mut now = 0;
+    created(&mut scenario, call(7, Direction::Up), now);
+    assert!(running_until(&mut scenario, &mut now, 5_000, |s| {
+        speed_of(s, 1) >= 1000
+    }));
+    let position = scenario.car_snapshot(1, now).expect("snapshot").position_mm;
+    assert!(position < 12_600);
+    let near = created(&mut scenario, call(6, Direction::Up), now);
+    assert!(running_until(&mut scenario, &mut now, 1_000, |s| {
+        count(s, EventKind::Assigned) == 2
+    }));
+    assert_ne!(
+        first_event(&scenario, EventKind::Assigned, near).car,
+        Some(1)
+    );
 }

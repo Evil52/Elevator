@@ -1,5 +1,5 @@
 use elevator_ctrl::eta::{CarMode, Direction};
-use elevator_ctrl::motion::{EmergencyStop, MotionParams, RestTrip};
+use elevator_ctrl::motion::{EmergencyStop, MotionParams, MovingTrip};
 use elevator_wire::protocol::DoorState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +25,7 @@ enum Drive {
     Trip {
         from_mm: u32,
         to_mm: u32,
-        trip: RestTrip,
+        trip: MovingTrip,
         elapsed_ms: u32,
     },
     Braking {
@@ -50,6 +50,7 @@ pub struct Car {
     cycle: Cycle,
     position_mm: u32,
     speed_mm_s: u32,
+    accel_mm_s2: i64,
     heading: Direction,
 }
 
@@ -62,13 +63,14 @@ impl Car {
             cycle: Cycle::Closed,
             position_mm: (floor as u32).saturating_sub(1) * params.floor_height_mm,
             speed_mm_s: 0,
+            accel_mm_s2: 0,
             heading: Direction::Up,
         }
     }
 
     pub fn step(&mut self, dt_ms: u32, mode: CarMode, targets: Targets) {
         match self.drive {
-            Drive::Trip { .. } => self.drive_trip(dt_ms, mode),
+            Drive::Trip { .. } => self.drive_trip(dt_ms, mode, targets),
             Drive::Braking { .. } => self.drive_braking(dt_ms),
             Drive::Rest => {
                 self.advance_doors(dt_ms);
@@ -87,6 +89,11 @@ impl Car {
     #[must_use]
     pub const fn speed_mm_s(&self) -> u32 {
         self.speed_mm_s
+    }
+
+    #[must_use]
+    pub const fn accel_mm_s2(&self) -> i64 {
+        self.accel_mm_s2
     }
 
     #[must_use]
@@ -180,7 +187,7 @@ impl Car {
         let Some(trip) = self
             .params
             .motion
-            .rest_trip(self.position_mm.abs_diff(to_mm))
+            .moving_trip(self.position_mm.abs_diff(to_mm), 0, 0)
         else {
             return;
         };
@@ -191,7 +198,51 @@ impl Car {
             trip,
             elapsed_ms: 0,
         };
-        self.drive_trip(dt_ms, mode);
+        self.drive_trip(dt_ms, mode, targets);
+    }
+
+    fn retarget(&mut self, targets: Targets) {
+        let Drive::Trip { to_mm, .. } = self.drive else {
+            return;
+        };
+        let motion = self.params.motion;
+        let Ok(accel) = u32::try_from(self.accel_mm_s2) else {
+            return;
+        };
+        let speed = self.speed_mm_s;
+        let Some(stop) = motion.stopping_distance_mm(speed, accel) else {
+            return;
+        };
+        let own = match self.heading {
+            Direction::Up => targets.up,
+            Direction::Down => targets.down,
+        };
+        let position = self.position_mm;
+        let reachable = |floor: &u32| {
+            let at = self.floor_position(*floor);
+            own & (1 << (*floor - 1)) != 0
+                && match self.heading {
+                    Direction::Up => at < to_mm && at >= position.saturating_add(stop),
+                    Direction::Down => at > to_mm && at.saturating_add(stop) <= position,
+                }
+        };
+        let floors = 1..=u32::from(self.params.floors);
+        let next = match self.heading {
+            Direction::Up => floors.clone().find(reachable),
+            Direction::Down => floors.rev().find(reachable),
+        };
+        let Some(floor) = next else {
+            return;
+        };
+        let to_mm = self.floor_position(floor);
+        if let Some(trip) = motion.moving_trip(position.abs_diff(to_mm), speed, accel) {
+            self.drive = Drive::Trip {
+                from_mm: position,
+                to_mm,
+                trip,
+                elapsed_ms: 0,
+            };
+        }
     }
 
     fn pick(&self, targets: Targets) -> Option<(u32, Direction)> {
@@ -227,7 +278,12 @@ impl Car {
         }
     }
 
-    fn drive_trip(&mut self, dt_ms: u32, mode: CarMode) {
+    fn drive_trip(&mut self, dt_ms: u32, mode: CarMode, targets: Targets) {
+        if mode == CarMode::Unavailable {
+            self.start_braking(dt_ms);
+            return;
+        }
+        self.retarget(targets);
         let Drive::Trip {
             from_mm,
             to_mm,
@@ -237,18 +293,17 @@ impl Car {
         else {
             return;
         };
-        if mode == CarMode::Unavailable {
-            self.start_braking(dt_ms);
-            return;
-        }
         let elapsed_ms = elapsed_ms.saturating_add(dt_ms);
-        let (travelled, speed) = trip.sample(elapsed_ms);
+        let (travelled, speed, accel) = trip.sample(elapsed_ms);
+        let speed = speed.min(self.params.motion.max_speed_mm_s());
+        let accel = accel.min(i64::from(self.accel_limit(speed)));
         self.position_mm = if to_mm >= from_mm {
             from_mm + travelled
         } else {
             from_mm - travelled
         };
         self.speed_mm_s = speed;
+        self.accel_mm_s2 = accel;
         if elapsed_ms >= trip.duration_ms() {
             self.position_mm = to_mm;
             self.speed_mm_s = 0;
@@ -264,9 +319,19 @@ impl Car {
         }
     }
 
+    fn accel_limit(&self, speed_mm_s: u32) -> u32 {
+        let motion = self.params.motion;
+        let headroom = u64::from(motion.max_speed_mm_s().saturating_sub(speed_mm_s));
+        let reachable = (2 * u64::from(motion.jerk_mm_s3()) * headroom).isqrt();
+        u32::try_from(reachable)
+            .unwrap_or(u32::MAX)
+            .min(motion.accel_mm_s2())
+    }
+
     fn start_braking(&mut self, dt_ms: u32) {
         let Some(brake) = EmergencyStop::new(self.speed_mm_s, self.params.brake_mm_s2) else {
             self.speed_mm_s = 0;
+            self.accel_mm_s2 = 0;
             self.drive = Drive::Rest;
             return;
         };
@@ -295,8 +360,10 @@ impl Car {
             Direction::Down => from_mm.saturating_sub(distance),
         };
         self.speed_mm_s = speed;
+        self.accel_mm_s2 = -i64::from(self.params.brake_mm_s2);
         if elapsed_ms >= brake.duration_ms() {
             self.speed_mm_s = 0;
+            self.accel_mm_s2 = 0;
             self.drive = Drive::Rest;
         } else {
             self.drive = Drive::Braking {
