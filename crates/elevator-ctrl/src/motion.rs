@@ -1,4 +1,6 @@
+mod moving;
 mod trip;
+pub use moving::MovingTrip;
 pub use trip::RestTrip;
 
 const UM: u128 = 1000;
@@ -86,6 +88,7 @@ impl MotionParams {
             return Some(StopPlan {
                 ramps_ms: 0,
                 cruise_ms: 0,
+                cruise: start,
             });
         }
 
@@ -108,6 +111,7 @@ impl MotionParams {
         Some(StopPlan {
             ramps_ms,
             cruise_ms,
+            cruise,
         })
     }
 
@@ -164,6 +168,7 @@ impl MotionParams {
 struct StopPlan {
     ramps_ms: u128,
     cruise_ms: u128,
+    cruise: u128,
 }
 
 impl StopPlan {

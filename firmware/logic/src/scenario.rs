@@ -302,6 +302,7 @@ impl Scenario {
             plant.step(elapsed_ms, input.state.mode, targets);
             input.state.position_mm = plant.position_mm();
             input.state.speed_mm_s = plant.speed_mm_s();
+            input.state.accel_mm_s2 = u32::try_from(plant.accel_mm_s2()).unwrap_or(0);
             input.state.heading = plant.heading();
             input.state.door_remaining_ms = plant.door_remaining_ms();
             input.stopped_at = plant.stopped_at();

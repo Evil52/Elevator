@@ -524,3 +524,229 @@ fn a_zero_floor_height_does_not_crash_or_report_a_floor() {
     car.step(10, CarMode::Normal, up(&[3]));
     assert_eq!(car.stopped_at(), None);
 }
+
+fn eta_params() -> EtaParams {
+    EtaParams {
+        building: Building::new(10, HEIGHT).unwrap(),
+        motion: motion(),
+        doors: DoorTimes::new(OPEN, DWELL, CLOSE).unwrap(),
+        aging_cap_ms: 0,
+    }
+}
+
+fn observed(car: &Car, targets: Targets) -> CarState {
+    CarState {
+        position_mm: car.position_mm(),
+        speed_mm_s: car.speed_mm_s(),
+        accel_mm_s2: u32::try_from(car.accel_mm_s2().max(0)).unwrap(),
+        heading: car.heading(),
+        door_remaining_ms: car.door_remaining_ms(),
+        up_calls: targets.up,
+        down_calls: targets.down,
+        car_calls: 0,
+        mode: CarMode::Normal,
+    }
+}
+
+fn drive(car: &mut Car, targets: Targets, millis: u32) {
+    for _ in 0..millis {
+        car.step(1, CarMode::Normal, targets);
+    }
+}
+
+fn stops(car: &mut Car, targets: Targets, count: usize) -> Vec<u8> {
+    let mut seen = Vec::new();
+    let mut targets = targets;
+    while seen.len() < count {
+        let waited = run_until(car, targets, 120_000, arrived);
+        assert!(waited < 120_000, "stuck after {seen:?}");
+        let floor = car.stopped_at().unwrap();
+        seen.push(floor);
+        let bit = !floor_bit(u32::from(floor));
+        targets = Targets {
+            up: targets.up & bit,
+            down: targets.down & bit,
+        };
+        run_until(car, targets, 60_000, |car| car.doors() == DoorState::Closed);
+    }
+    seen
+}
+
+#[test]
+fn an_up_call_ahead_stops_a_moving_car_exactly_when_the_eta_said() {
+    for (from, departed_ms, call, also) in [
+        (1, 1500, 5, 10),
+        (1, 600, 2, 10),
+        (1, 4000, 6, 10),
+        (3, 2500, 7, 10),
+        (1, 1500, 5, 7),
+    ] {
+        let mut car = Car::new(params(), from);
+        drive(&mut car, up(&[10]), departed_ms);
+        assert!(car.speed_mm_s() > 0);
+        let both = up(&[call, also, 10]);
+        let eta = eta_ms(
+            &eta_params(),
+            &observed(&car, up(&[also, 10])),
+            Call {
+                floor: u8::try_from(call).unwrap(),
+                direction: Direction::Up,
+            },
+        )
+        .unwrap();
+        let travel = run_until(&mut car, both, 60_000, arrived);
+        let case = format!("from {from} after {departed_ms} ms to {call}");
+        assert_eq!(
+            car.stopped_at(),
+            Some(u8::try_from(call).unwrap()),
+            "{case}"
+        );
+        assert_eq!(travel, eta, "{case}");
+        assert_eq!(car.position_mm(), (call - 1) * HEIGHT, "{case}");
+    }
+}
+
+#[test]
+fn a_down_call_ahead_stops_a_car_going_down() {
+    let mut car = Car::new(params(), 10);
+    drive(&mut car, down(&[1]), 2000);
+    assert_eq!(car.heading(), Direction::Down);
+    assert_eq!(stops(&mut car, down(&[4, 1]), 2), [4, 1]);
+}
+
+#[test]
+fn a_call_too_close_to_stop_for_is_served_after_the_far_stop() {
+    let mut car = Car::new(params(), 1);
+    let mut elapsed = 0;
+    while {
+        let stop = motion()
+            .stopping_distance_mm(
+                car.speed_mm_s(),
+                u32::try_from(car.accel_mm_s2().max(0)).unwrap(),
+            )
+            .unwrap();
+        car.position_mm() + stop <= 7 * HEIGHT
+    } {
+        car.step(1, CarMode::Normal, up(&[10]));
+        elapsed += 1;
+        assert!(elapsed < 60_000);
+    }
+    assert!(car.position_mm() < 7 * HEIGHT);
+    assert_eq!(stops(&mut car, up(&[8, 9, 10]), 3), [9, 10, 8]);
+}
+
+#[test]
+fn a_call_in_the_opposite_direction_does_not_stop_a_moving_car() {
+    let mut car = Car::new(params(), 1);
+    drive(&mut car, up(&[10]), 1500);
+    let targets = Targets {
+        up: floor_bit(10),
+        down: floor_bit(6),
+    };
+    assert_eq!(stops(&mut car, targets, 2), [10, 6]);
+}
+
+#[test]
+fn several_calls_on_the_way_are_served_in_floor_order() {
+    let mut car = Car::new(params(), 1);
+    drive(&mut car, up(&[10]), 800);
+    drive(&mut car, up(&[8, 10]), 700);
+    assert_eq!(stops(&mut car, up(&[4, 8, 10]), 3), [4, 8, 10]);
+}
+
+#[test]
+fn changing_the_stop_on_the_way_moves_the_car_without_jumps() {
+    for departed_ms in [300, 1000, 1500, 2600, 3500] {
+        let mut car = Car::new(params(), 1);
+        drive(&mut car, up(&[10]), departed_ms);
+        let mut previous = (car.position_mm(), car.speed_mm_s(), car.accel_mm_s2());
+        let mut elapsed = 0;
+        while !arrived(&car) {
+            car.step(1, CarMode::Normal, up(&[6, 10]));
+            let now = (car.position_mm(), car.speed_mm_s(), car.accel_mm_s2());
+            let case = format!("departed {departed_ms} t={elapsed} {previous:?} -> {now:?}");
+            assert!(now.0 >= previous.0 && now.0 - previous.0 <= 2, "{case}");
+            assert!(now.1.abs_diff(previous.1) <= 2, "{case}");
+            assert!(now.2.abs_diff(previous.2) <= 50, "{case}");
+            assert!(now.1 <= 1600 && now.2.abs() <= 1010, "{case}");
+            previous = now;
+            elapsed += 1;
+            assert!(elapsed < 60_000);
+        }
+        assert_eq!(car.stopped_at(), Some(6), "departed {departed_ms}");
+    }
+}
+
+#[test]
+fn a_car_at_rest_reports_no_acceleration_and_a_departing_one_speeds_up() {
+    let mut car = Car::new(params(), 1);
+    assert_eq!(car.accel_mm_s2(), 0);
+    drive(&mut car, up(&[10]), 1500);
+    assert!(car.accel_mm_s2() > 900);
+    run_until(&mut car, up(&[10]), 60_000, arrived);
+    assert_eq!(car.accel_mm_s2(), 0);
+}
+
+#[test]
+fn with_low_floors_it_stops_at_the_first_floor_it_still_can() {
+    let low = PlantParams {
+        floor_height_mm: 1000,
+        ..params()
+    };
+    let mut car = Car::new(low, 1);
+    let mut elapsed = 0;
+    while {
+        let stop = motion()
+            .stopping_distance_mm(
+                car.speed_mm_s(),
+                u32::try_from(car.accel_mm_s2().max(0)).unwrap(),
+            )
+            .unwrap();
+        car.position_mm() + stop <= 5000
+    } {
+        car.step(1, CarMode::Normal, up(&[10]));
+        elapsed += 1;
+        assert!(elapsed < 60_000);
+    }
+    assert_eq!(car.speed_mm_s(), 1600);
+    assert_eq!(stops(&mut car, up(&[6, 8, 10]), 3), [8, 10, 6]);
+}
+
+#[test]
+fn emergency_braking_reports_the_brake_deceleration_until_the_car_stops() {
+    let mut car = Car::new(params(), 1);
+    drive(&mut car, up(&[10]), 4000);
+    car.step(10, CarMode::Unavailable, up(&[10]));
+    assert!(car.speed_mm_s() > 0);
+    assert_eq!(car.accel_mm_s2(), -i64::from(BRAKE));
+    for _ in 0..1000 {
+        car.step(10, CarMode::Unavailable, up(&[10]));
+    }
+    assert_eq!(car.speed_mm_s(), 0);
+    assert_eq!(car.accel_mm_s2(), 0);
+}
+
+#[test]
+fn going_down_with_low_floors_it_stops_at_the_first_floor_it_still_can() {
+    let low = PlantParams {
+        floor_height_mm: 1000,
+        ..params()
+    };
+    let mut car = Car::new(low, 10);
+    let mut elapsed = 0;
+    while {
+        let stop = motion()
+            .stopping_distance_mm(
+                car.speed_mm_s(),
+                u32::try_from(car.accel_mm_s2().max(0)).unwrap(),
+            )
+            .unwrap();
+        car.position_mm() >= 4000 + stop
+    } {
+        car.step(1, CarMode::Normal, down(&[1]));
+        elapsed += 1;
+        assert!(elapsed < 60_000);
+    }
+    assert_eq!(car.speed_mm_s(), 1600);
+    assert_eq!(stops(&mut car, down(&[5, 3, 1]), 3), [3, 1, 5]);
+}
