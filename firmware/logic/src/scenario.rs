@@ -1,4 +1,4 @@
-use elevator_ctrl::calls::{Press, Rejection};
+use elevator_ctrl::calls::{Assignment, CallState, CallTable, CarId, Press, Rejection};
 use elevator_ctrl::dispatcher::{CarInput, Dispatcher, Event};
 use elevator_ctrl::eta::{Building, Call, CarMode, CarState, Direction, DoorTimes, EtaParams};
 use elevator_ctrl::motion::MotionParams;
@@ -8,15 +8,21 @@ use elevator_wire::protocol::{
 };
 
 use crate::alarms::{AlarmError, AlarmTable, Raised};
+use crate::car::{Car, PlantParams, Targets};
 use crate::events::EventLog;
 
-pub const FLOORS: usize = 10;
+const FLOOR_COUNT: u8 = 10;
+pub const FLOORS: usize = FLOOR_COUNT as usize;
 pub const CARS: usize = 3;
 pub const CALLS: usize = 18;
 pub const LOG_CAPACITY: usize = 64;
 pub const ALARM_CAPACITY: usize = 16;
 
 const FLOOR_HEIGHT_MM: u32 = 3000;
+const DOOR_OPEN_MS: u32 = 2000;
+const DOOR_DWELL_MS: u32 = 6000;
+const DOOR_CLOSE_MS: u32 = 3000;
+const BRAKE_MM_S2: u32 = 3000;
 const CAR_FLOORS: [u32; CARS] = [1, 5, 10];
 
 type Core = Dispatcher<FLOORS, CARS, CALLS>;
@@ -42,6 +48,10 @@ pub struct StepEvents {
 pub struct Scenario {
     dispatcher: Option<Core>,
     cars: [CarInput; CARS],
+    plants: Option<[Car; CARS]>,
+    doors: [DoorState; CARS],
+    assigned: [Targets; CARS],
+    last_step_ms: u64,
     paused: bool,
     log: EventLog<LOG_CAPACITY>,
     alarms: AlarmTable<ALARM_CAPACITY>,
@@ -49,13 +59,34 @@ pub struct Scenario {
     clock_ms: u64,
 }
 
+fn motion_params() -> Option<MotionParams> {
+    MotionParams::new(1600, 1000, 1000)
+}
+
 fn eta_params() -> Option<EtaParams> {
     Some(EtaParams {
         building: Building::new(10, FLOOR_HEIGHT_MM)?,
-        motion: MotionParams::new(1600, 1000, 1000)?,
-        doors: DoorTimes::new(2000, 6000, 3000)?,
+        motion: motion_params()?,
+        doors: DoorTimes::new(DOOR_OPEN_MS, DOOR_DWELL_MS, DOOR_CLOSE_MS)?,
         aging_cap_ms: 60_000,
     })
+}
+
+fn plant_params() -> Option<PlantParams> {
+    Some(PlantParams {
+        floors: FLOOR_COUNT,
+        floor_height_mm: FLOOR_HEIGHT_MM,
+        motion: motion_params()?,
+        open_ms: DOOR_OPEN_MS,
+        dwell_ms: DOOR_DWELL_MS,
+        close_ms: DOOR_CLOSE_MS,
+        brake_mm_s2: BRAKE_MM_S2,
+    })
+}
+
+fn new_plants() -> Option<[Car; CARS]> {
+    let params = plant_params()?;
+    Some(CAR_FLOORS.map(|floor| Car::new(params, u8::try_from(floor).unwrap_or(1))))
 }
 
 fn idle_car(floor: u32) -> CarInput {
@@ -83,6 +114,10 @@ impl Scenario {
         Self {
             dispatcher: None,
             cars: CAR_FLOORS.map(idle_car),
+            plants: None,
+            doors: [DoorState::Closed; CARS],
+            assigned: [Targets::default(); CARS],
+            last_step_ms: 0,
             paused: false,
             log: EventLog::new(),
             alarms: AlarmTable::new(),
@@ -92,10 +127,18 @@ impl Scenario {
     }
 
     pub fn restart(&mut self, now_ms: u64) -> Option<usize> {
-        self.cars = CAR_FLOORS.map(idle_car);
+        self.reset_cars();
+        self.last_step_ms = now_ms;
         self.paused = false;
         self.forget_history();
         self.reload(now_ms)
+    }
+
+    fn reset_cars(&mut self) {
+        self.cars = CAR_FLOORS.map(idle_car);
+        self.plants = new_plants();
+        self.doors = [DoorState::Closed; CARS];
+        self.assigned = [Targets::default(); CARS];
     }
 
     fn forget_history(&mut self) {
@@ -167,7 +210,7 @@ impl Scenario {
     }
 
     pub fn reset(&mut self) -> Option<()> {
-        self.cars = CAR_FLOORS.map(idle_car);
+        self.reset_cars();
         self.paused = false;
         self.forget_history();
         self.start_empty()
@@ -210,11 +253,15 @@ impl Scenario {
     }
 
     pub fn step(&mut self, now_ms: u64) -> StepEvents {
+        let elapsed_ms =
+            u32::try_from(now_ms.saturating_sub(self.last_step_ms)).unwrap_or(u32::MAX);
+        self.last_step_ms = now_ms;
         self.clock_ms = now_ms;
         let mut events = StepEvents::default();
         if self.paused {
             return events;
         }
+        self.drive_cars(elapsed_ms);
         let mut overflowed = false;
         let Self {
             dispatcher,
@@ -235,6 +282,39 @@ impl Scenario {
         events
     }
 
+    fn drive_cars(&mut self, elapsed_ms: u32) {
+        let Self {
+            plants,
+            dispatcher,
+            cars,
+            doors,
+            assigned,
+            ..
+        } = self;
+        let (Some(plants), Some(dispatcher)) = (plants.as_mut(), dispatcher.as_ref()) else {
+            return;
+        };
+        let table = dispatcher.calls();
+        for (index, plant) in plants.iter_mut().enumerate() {
+            let id = u8::try_from(index).unwrap_or(u8::MAX);
+            let targets = assigned_targets(table, id);
+            let input = &mut cars[index];
+            plant.step(elapsed_ms, input.state.mode, targets);
+            input.state.position_mm = plant.position_mm();
+            input.state.speed_mm_s = plant.speed_mm_s();
+            input.state.heading = plant.heading();
+            input.state.door_remaining_ms = plant.door_remaining_ms();
+            input.stopped_at = plant.stopped_at();
+            input.doors_open = plant.doors() == DoorState::Open;
+            input.confirmations = input.stopped_at.map_or([None, None], |floor| {
+                [Direction::Up, Direction::Down]
+                    .map(|direction| ticket(table, id, floor, direction))
+            });
+            doors[index] = plant.doors();
+            assigned[index] = targets;
+        }
+    }
+
     pub fn toggle_failure(&mut self, car: usize) -> bool {
         if self.is_failed(car) {
             self.recover_car(car).ok();
@@ -247,7 +327,7 @@ impl Scenario {
     #[must_use]
     pub fn car_snapshot(&self, car: usize, now_ms: u64) -> Option<CarSnapshot> {
         let state = self.cars.get(car)?.state;
-        let on_floor = state.position_mm % FLOOR_HEIGHT_MM == 0;
+        let on_floor = state.position_mm.is_multiple_of(FLOOR_HEIGHT_MM) && state.speed_mm_s == 0;
         let floor = on_floor
             .then(|| u8::try_from(state.position_mm / FLOOR_HEIGHT_MM + 1).ok())
             .flatten();
@@ -260,11 +340,7 @@ impl Scenario {
                 CarMode::Firefighters => WireMode::Firefighters,
                 CarMode::Unavailable => WireMode::Unavailable,
             },
-            doors: if state.door_remaining_ms == 0 {
-                DoorState::Closed
-            } else {
-                DoorState::Open
-            },
+            doors: self.doors[car],
             floor,
             position_mm: state.position_mm,
             speed_mm_per_sec: match state.heading {
@@ -272,8 +348,8 @@ impl Scenario {
                 Direction::Down => -speed,
             },
             eta_ms: None,
-            up_calls: state.up_calls,
-            down_calls: state.down_calls,
+            up_calls: self.assigned[car].up,
+            down_calls: self.assigned[car].down,
             model_time_ms: now_ms.min(JSON_SAFE_MAX),
         })
     }
@@ -319,6 +395,36 @@ impl Default for Scenario {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn ticket(
+    table: &CallTable<FLOORS>,
+    car: CarId,
+    floor: u8,
+    direction: Direction,
+) -> Option<Assignment> {
+    let call = Call { floor, direction };
+    let record = table.get(call)?;
+    (record.car == Some(car) && matches!(record.state, CallState::Assigned | CallState::Arrived))
+        .then_some(Assignment {
+            call,
+            id: record.id,
+            car,
+            attempt: record.attempt,
+        })
+}
+
+fn assigned_targets(table: &CallTable<FLOORS>, car: CarId) -> Targets {
+    (1..=FLOOR_COUNT).fold(Targets::default(), |mut targets, floor| {
+        let bit = 1_u32 << (floor - 1);
+        if ticket(table, car, floor, Direction::Up).is_some() {
+            targets.up |= bit;
+        }
+        if ticket(table, car, floor, Direction::Down).is_some() {
+            targets.down |= bit;
+        }
+        targets
+    })
 }
 
 fn log_event(log: &mut EventLog<LOG_CAPACITY>, now_ms: u64, event: Event) -> bool {

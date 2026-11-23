@@ -4,6 +4,7 @@ use core::num::NonZeroU32;
 
 pub mod alarms;
 pub mod button;
+pub mod car;
 pub mod commands;
 pub mod events;
 pub mod health;
